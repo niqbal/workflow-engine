@@ -345,3 +345,19 @@ Transport calls can be yield points. CI caught that the production runtime was m
 - WI-022 (background loops) was delivered: `check` shows CI green and 26/26. WI-023 (HTTP API)
   is waiting on the restored limit. Both are left for the owner as the first two runs of the
   runbook.
+
+## 2026-11-11 — Step 23: Owner-review proposals instead of stops; auto-merge on
+
+- The owner turned on auto-merge for tier 1–2 (`shadow: false`, `max_merge_tier: 2`). Tier 3
+  still waits for the owner.
+- Owner request: when a job needs a hand-owned change, the factory should make the minimal
+  change and hand it over for review, not stop and wait for the owner to write it.
+  - AGENTS.md rule 4: hand-owned code may be changed when the item cannot be done otherwise,
+    minimally, listed first in the summary under `OWNER REVIEW:`. The job is then tier 3, so it
+    waits for the owner. Rule 8: reviewers do not block on such a change alone.
+  - Contract suites move into `permissions.protected_paths`, so agents cannot edit them at all.
+    Other existing tests may now be edited when behavior changes on purpose, also listed under
+    OWNER REVIEW.
+- WI-062 (signed tokens) had stopped asking for exactly this. The owner's decisions are now in
+  the item: `Config.TokenKey`, a key generated from the node RNG when unset, and two forged-token
+  tests updated to sign with the key. Re-queued.

@@ -138,7 +138,7 @@ ITEMS = [
   ["/metrics exposes every listed metric; a test scrapes and checks names"]),
 
  ("WI-062","M5","factory",2,"Signed task tokens",["WI-019"],
-  "Task tokens (workflow and activity) are unsigned base64 JSON today, so anyone who can reach the API and knows a runID can complete or fail a started task (found in the WI-019 review). Sign tokens with HMAC-SHA256 using a per-cluster key from server Config (generated if absent in tests); reject bad signatures with invalid_argument. Share one encode/decode helper between workflowtasks.go and activitytasks.go.",
+  "Task tokens (workflow and activity) are unsigned base64 JSON today, so anyone who can reach the API and knows a runID can complete or fail a started task (found in the WI-019 review). Sign tokens with HMAC-SHA256 using a per-cluster key from server Config (generated if absent in tests); reject bad signatures with invalid_argument. Share one encode/decode helper between workflowtasks.go and activitytasks.go. Owner decisions (2026-11-11): (a) add `TokenKey []byte` to `Config` in server.go (approved hand-owned change); when it is empty, generate 32 bytes from the node's rnd.Rand at New() so single-node tests and simulations stay deterministic (multi-node key distribution comes with M4). (b) Update TestActivityTaskTokenRejectsForgedTokens and TestWorkflowTaskTokenRejectsForgedTokens to sign their forged tokens with the server's key. List both under OWNER REVIEW.",
   ["A token with a flipped byte or a wrong key is rejected with invalid_argument", "All 26 TestContract_ scenarios still pass", "Workflow and activity tokens use one shared helper"]),
 
  # ---------------- M6: showcase ----------------

@@ -5,3 +5,4 @@
 .env
 .factory-run-*.log
 factory/__pycache__/
+scripts/__pycache__/

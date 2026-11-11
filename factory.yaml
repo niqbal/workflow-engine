@@ -59,6 +59,11 @@ tiers:
   classifier_default: 2
 
 permissions:
+  # Contract suites can never be edited by agents. Other existing tests may be, when behavior
+  # changes on purpose; AGENTS.md rule 4 makes the agent list them under OWNER REVIEW.
+  protected_paths: [.github/**, factory.yaml, "**/.env", "**/.env.*", "**/*.pem", "**/*.key",
+                    contracttest/**, internal/store/storetest/**, internal/server/contract_test.go]
+  implementer: {may_edit_existing_tests_up_to_tier: 3}
   extra_allowed_commands: ["/Users/nawabiqbal/sdk/go1.27.4/bin/go doc", "/Users/nawabiqbal/sdk/go1.27.4/bin/go list", "/Users/nawabiqbal/sdk/go1.27.4/bin/go version"]
 
 models:
@@ -96,5 +101,5 @@ delivery:
   provider: local_git
 
 autonomy:
-  shadow: true
-  max_merge_tier: -1
+  shadow: false
+  max_merge_tier: 2
