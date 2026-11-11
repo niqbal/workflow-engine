@@ -48,6 +48,8 @@ tiers:
     tier: 2
   - paths: [internal/engine/**, internal/history/**, internal/shard/**, internal/xsync/**,
             internal/simrt/**, internal/lint/**, internal/server/api/**,
+            internal/clock/**, internal/rnd/**, internal/transport/**,
+            internal/server/server.go, internal/server/runs.go, internal/server/contract_test.go,
             internal/store/storetest/**, internal/store/store.go, wf/**, sim/**, contracttest/**,
             factory/**, factory.yaml, Makefile, go.mod]
     tier: 3

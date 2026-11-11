@@ -77,14 +77,14 @@ Acceptance:
 | WI-014 | human | 3 | Workflow SDK (package wf) | WI-013 |
 | WI-015 | human | 3 | Mutable state and transitions (internal/history) | WI-002 |
 | WI-016 | factory | 2 | Matching: in-memory task queues with long-poll | WI-010 |
-| WI-017 | factory | 2 | History service: start, signal, terminate | WI-011, WI-015, WI-005 |
-| WI-018 | factory | 2 | History service: workflow task path | WI-017 |
-| WI-019 | factory | 2 | History service: activity path | WI-017 |
-| WI-020 | factory | 2 | Transfer processor with ack level and redispatch | WI-016, WI-018, WI-019 |
-| WI-021 | factory | 2 | Timer processor core | WI-018 |
-| WI-022 | factory | 2 | Timeouts and retry backoff | WI-021, WI-019 |
+| WI-017 | factory | 2 | History service: start, signal, terminate | WI-011, WI-015, WI-005, WI-016 |
+| WI-018 | factory | 2 | Workflow task handlers: poll, complete, fail | WI-020 |
+| WI-019 | factory | 2 | Activity task handlers: poll, complete, fail | WI-021 |
+| WI-020 | factory | 2 | Transfer processor and Settle (transfer half) | WI-017 |
+| WI-021 | factory | 2 | Timer processor and Settle (timer half) | WI-018 |
+| WI-022 | factory | 2 | Background processing loops | WI-019 |
 | WI-023 | factory | 2 | HTTP API and Go client | WI-017, WI-016 |
-| WI-024 | factory | 2 | Worker and end-to-end example | WI-014, WI-023, WI-022, WI-020 |
+| WI-024 | factory | 2 | Worker and end-to-end example | WI-014, WI-023, WI-022 |
 | WI-025 | factory | 1 | Minimal CLI | WI-023 |
 
 ### WI-010 Deterministic runtime and run-twice trace check (#7)
@@ -147,52 +147,54 @@ Acceptance:
 
 ### WI-017 History service: start, signal, terminate (#14)
 
-Start with requestID dedup against the latest run open or closed; signal with dedup before the closed check; terminate. One store write each (SPEC §8.1, §8.4). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
+Handlers StartWorkflow (validate, shard by s.ShardFor, start dedup via store.GetLatestRun against the latest run open or closed: same requestID returns its runID, otherwise already_started; new runs via history.NewRun + s.createRun), SignalWorkflow (Machine.Signal), TerminateWorkflow, DescribeWorkflow and GetHistory (latest run). Skeleton: internal/server/server.go and runs.go (hand-owned) give the Server, shard fences, and the only write path, s.createRun and s.update(ctx, key, doneTasks, fn func(*history.Machine) error), which persist history.Machine output (WI-015). Implement handlers in internal/server/service.go (or new files) through those; never write to the store directly. Contract scenarios run as top-level tests TestContract_<Name> in internal/server/contract_test.go (hand-owned; do not edit).
 
 Acceptance:
-- contracttest scenarios for start, signal and terminate pass
-- Every state change is one UpdateRun (counting store wrapper)
-- No changes to contracttest
+- `go test ./internal/server -run '^TestContract_(StartRejectsMissingFields|StartIsIdempotentByRequestID)$'` passes
+- Unit tests for start dedup against a closed run, signal to a missing workflow (not_found) and terminate of a closed run (no-op)
+- No changes to contracttest, storetest, internal/history or runs.go
 
-### WI-018 History service: workflow task path (#15)
+### WI-018 Workflow task handlers: poll, complete, fail (#15)
 
-Record started, complete with commands, fail, buffered events while started, rejected close when buffered events exist (SPEC §4.2, §8.2). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
-
-Acceptance:
-- contracttest workflow-task scenarios pass, including buffered events and rejected close
-- No changes to contracttest
-
-### WI-019 History service: activity path (#16)
-
-Record started, complete, fail; stale attempt rejected; retry state and backoff timer task written (SPEC §8.3). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
+PollWorkflowTask: long-poll matching (xsync.Chan.ReceiveCtx semantics: return on ctx done or LongPoll on the server clock), then s.update with Machine.WorkflowTaskStarted and the transfer task in doneTasks; skip stale tasks and keep polling; return persisted history plus transient events. Task token: opaque base64 JSON of {shard, workflowID, runID, seq}. CompleteWorkflowTask (Machine.CompleteWorkflowTask) and FailWorkflowTask. Skeleton: internal/server/server.go and runs.go (hand-owned) give the Server, shard fences, and the only write path, s.createRun and s.update(ctx, key, doneTasks, fn func(*history.Machine) error), which persist history.Machine output (WI-015). Implement handlers in internal/server/service.go (or new files) through those; never write to the store directly. Contract scenarios run as top-level tests TestContract_<Name> in internal/server/contract_test.go (hand-owned; do not edit).
 
 Acceptance:
-- contracttest activity scenarios pass
-- No changes to contracttest
+- `go test ./internal/server -run '^TestContract_(FirstWorkflowTaskCarriesHistory|StaleWorkflowTaskTokenRejected|SignalAppendedWhileTaskScheduled|SignalBufferedWhileTaskStarted|CloseRejectedWhileEventsBuffered|SignalDedupAndClosedRun|StartDedupSurvivesClose|InvalidCommandRejected|LostWorkflowTaskRedispatched)$'` passes
+- Previously passing TestContract_ scenarios still pass
 
-### WI-020 Transfer processor with ack level and redispatch (#17)
+### WI-019 Activity task handlers: poll, complete, fail (#16)
 
-Read from the lowest undeleted task, push to matching, delete on start, redispatch unstarted workflow and activity tasks every redispatchInterval (SPEC §8.1-8.3). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
-
-Acceptance:
-- contracttest redispatch scenarios pass
-- With variable commit latency in memstore, no task is ever skipped (new test)
-
-### WI-021 Timer processor core (#18)
-
-Per-shard min-heap with loadAheadWindow; conditional fire bound to the armed reference and attempt; delete after fire (SPEC §10). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
+PollActivityTask: like PollWorkflowTask, with Machine.ActivityStarted; return input, attempt, deadline and IdempotencyKey workflowID/runID/scheduledEventID. CompleteActivityTask and FailActivityTask via Machine. Task token: opaque base64 JSON of {shard, workflowID, runID, scheduledEventID, attempt}. Skeleton: internal/server/server.go and runs.go (hand-owned) give the Server, shard fences, and the only write path, s.createRun and s.update(ctx, key, doneTasks, fn func(*history.Machine) error), which persist history.Machine output (WI-015). Implement handlers in internal/server/service.go (or new files) through those; never write to the store directly. Contract scenarios run as top-level tests TestContract_<Name> in internal/server/contract_test.go (hand-owned; do not edit).
 
 Acceptance:
-- Never fires before fireAt on the simulated clock
-- Crash between fire and delete produces no second TimerFired
-- contracttest timer scenarios pass
+- `go test ./internal/server -run '^TestContract_(ActivityRoundTrip|SignalSchedulesTaskWhenIdle|ActivityRetryWithBackoff|ActivityNonRetryableFailure|ActivityAttemptsExhausted|ActivityStartToCloseTimeoutAndStaleAttempt|ActivityScheduleToCloseTimeout|LostActivityTaskRedispatched|TerminateClosesRunAndDropsWork|DescribeShowsPendingWork)$'` passes
+- All 26 TestContract_ scenarios pass
 
-### WI-022 Timeouts and retry backoff (#19)
+### WI-020 Transfer processor and Settle (transfer half) (#17)
 
-Activity start-to-close and schedule-to-close, workflow-task timeout, workflow execution timeout, retry backoff per RetryPolicy. All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
+Per owned shard: read transfer tasks from the ack level (lowest undeleted ID, SPEC §8.1), push each DispatchRef to matching (workflow or activity FIFO of its task queue) carrying the task key, track pushed tasks in memory, and re-push any still-undeleted task once RedispatchInterval has passed on the server clock. Transfer tasks are deleted by the start handlers (WI-018/019) via update's doneTasks, not here. Implement the transfer half of Server.Settle: process until nothing new is pushed at the current time. Skeleton: internal/server/server.go and runs.go (hand-owned) give the Server, shard fences, and the only write path, s.createRun and s.update(ctx, key, doneTasks, fn func(*history.Machine) error), which persist history.Machine output (WI-015). Implement handlers in internal/server/service.go (or new files) through those; never write to the store directly. Contract scenarios run as top-level tests TestContract_<Name> in internal/server/contract_test.go (hand-owned; do not edit).
 
 Acceptance:
-- contracttest timeout scenarios pass, including an old attempt's timeout being a no-op
+- Unit tests with memstore fault hooks (CommitDelay) show no task is skipped when a later ID commits first
+- A task dropped from matching is re-pushed after RedispatchInterval on a manual clock and not before
+- Settle returns when there is nothing left to push
+
+### WI-021 Timer processor and Settle (timer half) (#18)
+
+Per owned shard: read due timer tasks (FireAt <= now, ordered), apply each via s.update with Machine.FireTimer and the timer task in doneTasks. In production a loop sleeps on the server clock until the next FireAt (load-ahead window, SPEC §10); here implement the timer half of Server.Settle: fire every due task until none is due at the current time. Skeleton: internal/server/server.go and runs.go (hand-owned) give the Server, shard fences, and the only write path, s.createRun and s.update(ctx, key, doneTasks, fn func(*history.Machine) error), which persist history.Machine output (WI-015). Implement handlers in internal/server/service.go (or new files) through those; never write to the store directly. Contract scenarios run as top-level tests TestContract_<Name> in internal/server/contract_test.go (hand-owned; do not edit).
+
+Acceptance:
+- `go test ./internal/server -run '^TestContract_(UserTimerFiresOnceOnTime|CanceledTimerNeverFires|WorkflowTaskTimeoutRetries|WorkflowTaskFailureSeriesWritesOneEvent|ExecutionTimeoutClosesRun)$'` passes
+- Previously passing TestContract_ scenarios still pass
+
+### WI-022 Background processing loops (#19)
+
+Production mode: Server.Run(ctx) starts, per owned shard, a transfer loop and a timer loop as xsync.Runtime tasks that do the same work as Settle continuously: the transfer loop wakes when new tasks are written (signal from the write path) or at the next redispatch time; the timer loop sleeps on the clock until the earliest FireAt. No busy waiting. Server.Stop(ctx) ends them. Skeleton: internal/server/server.go and runs.go (hand-owned) give the Server, shard fences, and the only write path, s.createRun and s.update(ctx, key, doneTasks, fn func(*history.Machine) error), which persist history.Machine output (WI-015). Implement handlers in internal/server/service.go (or new files) through those; never write to the store directly. Contract scenarios run as top-level tests TestContract_<Name> in internal/server/contract_test.go (hand-owned; do not edit).
+
+Acceptance:
+- A test on xsync.Real with clock.Real runs a workflow task round trip without calling Settle
+- Under simrt, a run-twice trace check of the loops is identical
+- Stop returns promptly and leaves no tasks running
 
 ### WI-023 HTTP API and Go client (#20)
 

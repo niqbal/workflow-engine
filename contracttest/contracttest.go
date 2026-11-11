@@ -35,11 +35,32 @@ type Factory func(t *testing.T) Harness
 
 const q = "q"
 
-// Run executes every scenario.
+// Run executes every scenario as a subtest.
 func Run(t *testing.T, newHarness Factory) {
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) { sc.fn(t, newHarness(t)) })
 	}
+}
+
+// Names lists the scenarios, in order.
+func Names() []string {
+	out := make([]string, len(scenarios))
+	for i, sc := range scenarios {
+		out[i] = sc.name
+	}
+	return out
+}
+
+// RunOne executes a single scenario. Servers wire each scenario to its own top-level test
+// (see internal/server/contract_test.go) so gates compare results scenario by scenario.
+func RunOne(t *testing.T, name string, newHarness Factory) {
+	for _, sc := range scenarios {
+		if sc.name == name {
+			sc.fn(t, newHarness(t))
+			return
+		}
+	}
+	t.Fatalf("contracttest: no scenario %q", name)
 }
 
 var scenarios = []struct {

@@ -39,15 +39,18 @@ def main():
     mapping = json.loads(MAP.read_text()) if MAP.exists() else {}
     for (i, m, owner, tier, title, deps, body, acc) in items.ITEMS:
         t = f"{i} {title}"
-        if t not in issues:
-            dep_txt = ", ".join(f"{d} (#{mapping[d]})" if d in mapping else d for d in deps) or "none"
-            md = (f"{body}\n\n**Owner:** {owner} · **Expected tier:** {tier} · **Milestone:** {m}\n\n"
-                  f"**Depends on:** {dep_txt}\n\n### Acceptance\n" + "\n".join(f"- [ ] {a}" for a in acc) +
-                  "\n\nSpec: [docs/SPEC.md](../blob/main/docs/SPEC.md) · Item list: [docs/WORK-ITEMS.md](../blob/main/docs/WORK-ITEMS.md)")
+        dep_txt = ", ".join(f"{d} (#{mapping[d]})" if d in mapping else d for d in deps) or "none"
+        md = (f"{body}\n\n**Owner:** {owner} · **Expected tier:** {tier} · **Milestone:** {m}\n\n"
+              f"**Depends on:** {dep_txt}\n\n### Acceptance\n" + "\n".join(f"- [ ] {a}" for a in acc) +
+              "\n\nSpec: [docs/SPEC.md](../blob/main/docs/SPEC.md) · Item list: [docs/WORK-ITEMS.md](../blob/main/docs/WORK-ITEMS.md)")
+        num = next((n for tt, n in issues.items() if tt.startswith(i + " ")), None)  # match by ID
+        if num is None:
             num = api("POST", "issues", title=t, body=md, labels=[f"owner:{owner}", f"tier:{tier}"],
                       milestone=ms[f"{m} {NAMES[m]}"])["number"]
-            issues[t] = num
-        mapping[i] = issues[t]
+        elif "--update" in sys.argv and i in sys.argv:
+            gh("issue", "edit", str(num), "-R", REPO, "--title", t, "--body", md)
+        issues[t] = num
+        mapping[i] = num
     MAP.write_text(json.dumps(mapping, indent=1) + "\n")
     # Tracking issue per milestone with a task list
     for m, n in NAMES.items():
