@@ -78,6 +78,9 @@ type WorkflowTaskInfo struct {
 	TaskQueue        string    `json:"taskQueue"`
 	StartedAt        time.Time `json:"startedAt,omitempty"`
 	FailuresInSeries int       `json:"failuresInSeries,omitempty"` // SPEC §4.2
+	Seq              int64     `json:"seq"`                        // unique per attempt; timer and token refs use it
+	ScheduledAt      time.Time `json:"scheduledAt"`
+	WorkerIdentity   string    `json:"workerIdentity,omitempty"`
 }
 
 // ActivityInfo is a scheduled activity that has not ended. Keyed by ScheduledEventID.
@@ -123,11 +126,12 @@ type MutableState struct {
 	NextEventID    int64     `json:"nextEventID"`
 	LastEventTime  time.Time `json:"lastEventTime"` // timestamps are clamped non-decreasing (SPEC §10)
 
-	WorkflowTask *WorkflowTaskInfo       `json:"workflowTask,omitempty"`
-	Activities   map[int64]*ActivityInfo `json:"activities,omitempty"`
-	Timers       map[string]*TimerInfo   `json:"timers,omitempty"`
-	Buffered     []BufferedEvent         `json:"buffered,omitempty"`
-	Signals      []SignalOutcome         `json:"signals,omitempty"` // last SignalDedupLimit, oldest first
+	WorkflowTask    *WorkflowTaskInfo       `json:"workflowTask,omitempty"`
+	WorkflowTaskSeq int64                   `json:"workflowTaskSeq"`
+	Activities      map[int64]*ActivityInfo `json:"activities,omitempty"`
+	Timers          map[string]*TimerInfo   `json:"timers,omitempty"`
+	Buffered        []BufferedEvent         `json:"buffered,omitempty"`
+	Signals         []SignalOutcome         `json:"signals,omitempty"` // last SignalDedupLimit, oldest first
 }
 
 // Encode serializes the state for the store, which treats it as opaque bytes.

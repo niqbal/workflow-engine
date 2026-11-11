@@ -3,3 +3,4 @@
 *.out
 /sim/failures/
 .env
+.factory-run-*.log
