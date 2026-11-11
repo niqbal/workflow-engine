@@ -38,6 +38,9 @@ type Runtime interface {
 	NewLocker() Locker
 	NewCond(l Locker) Cond
 	Clock() clock.Clock
+	// Yield lets other tasks run. Store and Transport implementations call it on entry, which
+	// is what makes every Store call a yield point under simulation. No-op in production.
+	Yield()
 }
 
 // SortedKeys returns a map's keys in ascending order. Server code iterates maps only through it.

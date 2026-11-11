@@ -82,3 +82,6 @@ func (c *realCond) Broadcast() {
 	close(c.ch)
 	c.ch = make(chan struct{})
 }
+
+// Yield is a no-op in production: goroutines are preempted by the Go scheduler.
+func (r *Real) Yield() {}
