@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/niqbal/workflow-engine/internal/history"
 	"github.com/niqbal/workflow-engine/internal/server/api"
 )
 
@@ -18,20 +17,7 @@ var _ api.Service = (*Server)(nil)
 // Service returns the node's api.Service.
 func (s *Server) Service() api.Service { return s }
 
-// WI-017: start, signal, terminate, describe, history.
-func (s *Server) StartWorkflow(ctx context.Context, r api.StartRequest) (api.StartResponse, error) {
-	return api.StartResponse{}, errNotBuilt
-}
-func (s *Server) SignalWorkflow(ctx context.Context, r api.SignalRequest) error { return errNotBuilt }
-func (s *Server) TerminateWorkflow(ctx context.Context, r api.TerminateRequest) error {
-	return errNotBuilt
-}
-func (s *Server) DescribeWorkflow(ctx context.Context, id string) (api.Description, error) {
-	return api.Description{}, errNotBuilt
-}
-func (s *Server) GetHistory(ctx context.Context, id string) ([]history.Event, error) {
-	return nil, errNotBuilt
-}
+// WI-017 (start, signal, terminate, describe, history) lives in workflows.go.
 
 // WI-018: workflow tasks (poll, complete, fail).
 func (s *Server) PollWorkflowTask(ctx context.Context, r api.PollRequest) (*api.WorkflowTask, error) {
