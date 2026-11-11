@@ -250,3 +250,14 @@ Transport calls can be yield points. CI caught that the production runtime was m
   workflow-task handlers (WI-018): polling needs pushed tasks. Each server item now names the
   exact contract scenarios it must turn green: WI-017 (2), WI-018 (9), WI-021 (5),
   WI-019 (10). WI-022 became the production background loops. GitHub issues updated in place.
+
+## 2026-11-11 — Step 17: Paused on the Claude usage limit
+
+- WI-030 first stopped correctly: it needed `pgx/v5`, and `go.mod` is hand-owned. The
+  dependency is pinned on main (v5.7.5). The stale job was marked rejected through the asf
+  store (asf has no cancel command, another factory gap) and re-queued as JOB-0c9d99.
+- WI-017 (JOB-9f9448) implemented and tested, then **failed at review: the Claude 5-hour
+  usage limit** (headless Claude Code shares the subscription). JOB-0c9d99 will hit the same.
+- **Resume:** after the limit resets, run `asf retry JOB-9f9448` and
+  `asf run --job JOB-9f9448` (it re-enters at reviewing), then check JOB-0c9d99 the same way.
+  Next queue order: WI-020, then WI-018 and WI-021, then WI-019.
