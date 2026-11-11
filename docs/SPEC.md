@@ -179,9 +179,13 @@ JSON-encoded bytes.
   workflow) while buffered events exist, the close command is rejected: the task completes
   with no close, the buffered events are appended, and a new task is scheduled. An acknowledged
   signal is therefore always seen by workflow code before the run can close.
-- **Workflow-task failures.** Only the first failure of a series writes
-  `WorkflowTaskFailed`. Later attempts are counted in mutable state, so a run blocked on
-  non-determinism (§7.3) retries with backoff (capped at 10 minutes) without growing history.
+- **Workflow-task failures and timeouts.** The first failure or timeout of a series writes
+  `WorkflowTaskFailed` or `WorkflowTaskTimedOut`. Every later attempt in the series is
+  **transient**: its `WorkflowTaskScheduled` and `WorkflowTaskStarted` are not persisted but
+  are appended to the history sent to the worker (with the IDs they would get). They are
+  persisted only when that attempt completes. Further failures write nothing. So a run blocked
+  on non-determinism (§7.3) retries forever without growing history. Attempt 2 is offered at
+  once; attempt n ≥ 3 waits `min(1s · 2^(n−3), 10 min)`.
 - A closed run accepts no new events except via `terminate` on an already-closed run, which is
   a no-op.
 
@@ -498,23 +502,25 @@ model.
 ```go
 type Store interface {
     // Shards
-    AcquireShard(ctx context.Context, shard int, node NodeID, lease time.Duration) (Fence, error)
-    RenewShard(ctx context.Context, f Fence, lease time.Duration) error
+    GetShard(ctx context.Context, shard int) (ShardInfo, error)
+    AcquireShard(ctx context.Context, shard int, owner string, now time.Time, lease time.Duration) (Fence, error)
+    RenewShard(ctx context.Context, f Fence, now time.Time, lease time.Duration) error
 
-    // Runs and history: one atomic write per state change (§8.1)
-    CreateRun(ctx context.Context, f Fence, run RunRecord, events []Event, tasks []Task) error
-    UpdateRun(ctx context.Context, f Fence, key RunKey, expectedNextEventID int64,
-              events []Event, state MutableState, newTasks []Task, doneTasks []TaskKey) error
-    GetRun(ctx context.Context, key RunKey) (RunRecord, MutableState, error)
-    GetOpenRunByWorkflowID(ctx context.Context, shard int, workflowID string) (RunKey, bool, error)
-    ReadHistory(ctx context.Context, key RunKey, fromEventID int64, limit int) ([]Event, error)
+    // Runs and history: one atomic write per state change (§8.1). Events and state are
+    // opaque bytes to the store.
+    CreateRun(ctx context.Context, f Fence, r NewRun) ([]Task, error)
+    UpdateRun(ctx context.Context, f Fence, key RunKey, u Update) (newDBVersion int64, written []Task, err error)
+    GetRun(ctx context.Context, key RunKey) (RunSnapshot, error)  // DBVersion, NextEventID, Open, State
+    GetLatestRun(ctx context.Context, shard int, workflowID string) (RunKey, error)  // open or closed
+    ReadHistory(ctx context.Context, key RunKey, fromID int64, limit int) ([]EventRecord, error)
 
     // Outbox
     ReadTransferTasks(ctx context.Context, shard int, afterTaskID int64, limit int) ([]Task, error)
     ReadTimerTasks(ctx context.Context, shard int, upTo time.Time, limit int) ([]Task, error)
     DeleteTasks(ctx context.Context, f Fence, keys []TaskKey) error
 }
-// Errors: ErrFenced, ErrConflict, ErrNotFound, ErrAlreadyExists.
+// Errors: ErrFenced, ErrConflict, ErrNotFound, ErrAlreadyExists, ErrInvalid.
+// The authoritative definition is internal/store/store.go.
 ```
 
 - **storetest**: one contract test suite in `internal/store/storetest` that every
@@ -545,7 +551,10 @@ type Store interface {
 | `GET /healthz`, `GET /metrics` | Health and Prometheus |
 
 Errors are JSON `{code, message}`, with codes `not_found`, `already_started`,
-`stale_task`, `not_owner` (retried internally), `invalid_argument`, `unavailable`.
+`stale_task`, `workflow_closed` (signal to a closed run), `not_owner` (retried internally),
+`invalid_argument`, `unavailable`. The service contract is `internal/server/api`.
+An activity failure is non-retryable if its type is in the policy's `NonRetryableErrors`
+or the activity sets `NonRetryable`.
 
 ### 13.2 CLI
 `wfe server --config wfe.yaml` · `wfe workflow start|signal|terminate|describe|history` ·

@@ -102,11 +102,68 @@ Work items after the re-cut: **37 (17 human, 20 factory)**. The human share rose
 accelerates the bulk code, while the parts the guarantees rest on are written and owned by
 hand.
 
-## Next steps
+## 2026-11-11 — Step 8: GitHub repository, issues and milestones
 
-1. Upgrade Go to ≥ 1.22.
-2. M0 by hand: WI-001 to WI-006 (skeleton, interfaces, lint, storetest, contracttest, replay helper).
-3. M1 human items: WI-010 deterministic runtime, WI-012 to WI-015.
-4. Onboard the factory: `asf --repo ~/work/workflow-engine init`, set the tier rules and
-   gates from SPEC §15.2, point local-file intake at `factory/ready/`, set the budget cap.
-5. Move WI-011 and WI-016 to `factory/ready/` and run the first two factory jobs.
+- Private repository: https://github.com/niqbal/workflow-engine (made private by default; it
+  can be made public later).
+- `factory/github_sync.py` creates, idempotently, from `factory/items.py`: labels
+  (`owner:human`, `owner:factory`, `tier:1-3`, `tracking`), 7 milestones (M0-M6), one issue
+  per work item (#1-#37, acceptance criteria as checklists) and one tracking issue per milestone
+  (#38-#44). `factory/issues.json` maps item IDs to issue numbers, and every backlog file
+  names its issue.
+
+## 2026-11-11 — Step 9: Run asf on Claude Code headless instead of the API
+
+The request: build with `asf`, but use Claude Code headless (`claude -p`) rather than direct API
+calls.
+
+- **Finding the CLI.** `claude` was not on PATH. The desktop app bundles Claude Code at
+  `~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app/Contents/MacOS/claude`
+  (2.1.317 here; the `claude-code-vm` copy is a Linux build). It is signed in, so headless
+  calls need no API key.
+- **The design problem.** asf's security model is that agents reach the sandbox only through
+  its broker, which enforces permissions, protected paths and test integrity. Letting Claude
+  Code run its own tools would bypass all of that.
+- **The design.** A new model provider, `claude_code` (`asf/adapters/models/claude_code.py`
+  in the factory repo, branch `claude-code-provider`). Each agent turn is one `claude -p`
+  call with Claude Code's tools switched off (`--tools ""`). The model returns the tool calls
+  it wants as structured output (`--json-schema`). asf's unchanged agent loop runs them
+  through the broker and sends results in the next call, which resumes the same session
+  (`--resume`). User settings and MCP servers are excluded (`--setting-sources ""`,
+  `--strict-mcp-config`), and API keys are scrubbed from the CLI's environment.
+- **A prototype lesson.** The first prompt made the model try to call a real tool and give
+  up ("the tool is unavailable"). The fix was an explicit protocol in the system prompt: the
+  host runs tools after your reply; requesting one is how you use it.
+- **Verification.** 4 new unit tests with a fake CLI (resume, tool-result threading, retry on
+  bad output, key scrubbing, structured calls); the factory suite passes (51 tests); a live
+  two-turn tool loop on the real CLI cost about $0.02 at list price.
+
+## 2026-11-11 — Step 10: Go toolchain
+
+Homebrew no longer builds Go for Intel Macs, and `brew upgrade go` was a no-op. Installed the
+official go1.27.4 darwin-amd64 release from go.dev into `~/sdk/go1.27.4` after checking its
+SHA-256 against go.dev's published list. The system Go (1.19.5) is untouched; the Makefile
+picks the newest `~/sdk/go1.2*` automatically.
+
+## 2026-11-11 — Step 11: M0 by hand (WI-001 to WI-006)
+
+| Item | What was built |
+|---|---|
+| WI-001 | Module `github.com/niqbal/workflow-engine`, package layout, Makefile (`build`, `vet`, `test`, `race`, `ci`), `scripts/ci.sh` |
+| WI-002 | `internal/clock`, `internal/rnd`, `internal/transport`, `internal/xsync` (Runtime, Locker, Cond with deadlines, generic `Chan`, `SortedKeys`, production runtime); `internal/history` (20 event types with tagged JSON, 6 command types, retry policy and backoff, MutableState with buffered events and signal dedup); `internal/store` (Store interface with fences, DBVersion and opaque events/state); `internal/server/api` (service contract and error codes) |
+| WI-003 | `internal/lint`: AST lint over the server scope. Bans wall-clock time, `context.WithTimeout/WithDeadline`, `math/rand`, `net`, `sync`, `go`, `select`, channels and map ranges (type-checked). A test plants one violation of each kind |
+| WI-004 | `storetest`: 15 contract cases, including state-only writes bumping DBVersion (review C2), reading tasks from the ack level after a middle delete (C6), atomic DoneTasks, stale fences, and 16 concurrent writers with exactly one winner |
+| WI-005 | `contracttest`: 26 scenarios against `api.Service` plus a harness that controls the clock: start dedup across close (C4), signal dedup before the closed check (C5), buffering and rejected close (C1), retry backoff, stale attempts (C3), schedule-to-close, timers, transient workflow-task retries, redispatch of lost tasks, execution timeout, terminate, describe |
+| WI-006 | `wftest`: history loading and `ReplayFromFile`, waiting on the replayer (WI-013) |
+
+Checks: `make ci` (build, vet, `test -race`) is green. Both suites were run against
+do-nothing stubs and fail as they should. The first stub run exposed a storetest case that
+panicked instead of failing cleanly, which would have hidden the cases after it; it now
+checks lengths first.
+
+Decisions made while writing the contracts, folded back into SPEC §4.2, §12 and §13.1:
+- Workflow-task retries after the first failure are **transient** (Temporal's approach):
+  shown to the worker, persisted only on completion. One event per failure series.
+- The store treats events and mutable state as opaque bytes; `GetLatestRun` replaces
+  `GetOpenRunByWorkflowID` (start dedup needs closed runs too).
+- New error code `workflow_closed`; activity failures carry an explicit `NonRetryable` flag.
