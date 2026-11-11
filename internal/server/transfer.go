@@ -33,6 +33,7 @@ type idRange struct{ lo, hi int64 }
 // the ack level low, which is harmless: the store returns undeleted tasks only.
 type transferShard struct {
 	mu     xsync.Locker        // one scan at a time
+	fence  store.Fence         // ownership epoch the state below was built under (recovery.go)
 	ack    int64               // scans read from here
 	seen   int64               // highest ID ever read
 	gaps   []idRange           // unseen IDs below seen, ascending and disjoint
@@ -61,6 +62,7 @@ func (s *Server) processTransfer(ctx context.Context, shard int) (int, error) {
 	ts := s.transferShard(shard)
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
+	s.loadTransferShard(shard, ts)
 
 	var present []store.Task
 	from := ts.ack
