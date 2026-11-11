@@ -295,3 +295,19 @@ Transport calls can be yield points. CI caught that the production runtime was m
   needed owner sign-off. Fixed at the source: `internal/server/subsystems.go` is a
   factory-owned extension point, `Server` embeds it, and AGENTS.md says to use it.
 - Queued WI-018 (workflow-task handlers, 9 contract scenarios).
+
+## 2026-11-11 — Step 20: WI-031 by hand, WI-018 merged, two more factory fixes, an issue mix-up
+
+- **Factory fix:** triage returned the clarification `""`, which was treated as a real question
+  and stopped WI-018. Placeholder answers (`""`, none, N/A) are now ignored, with a test.
+- **WI-031 (by hand): Postgres stress tests.** Two owners fight over one shard (1,331
+  ownership changes) while both write: 10,000 attempts, 2,114 accepted, 7,886 fenced, zero
+  accepted writes that started after a newer fence was granted. 625 rounds of 16 concurrent
+  writers: exactly one winner each round, no lost or doubled writes. The race detector caught
+  a shared map in the first draft of the test itself.
+- **WI-018 (workflow-task handlers), $17.53.** Contract board **2 → 14 of 26**: the nine
+  assigned scenarios plus three that only needed what already existed.
+- **Mistake and fix:** the WI-030 merge commit said "Closes #27" from memory, which closed the
+  oracle issue (WI-041) instead of WI-030 (#23). Reopened #27 and closed #23 with notes. Every
+  issue number now comes from `factory/issues.json`, never from memory.
+- Queued WI-021 (timer processor, 5 scenarios).
