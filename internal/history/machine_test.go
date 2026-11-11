@@ -372,3 +372,22 @@ func TestValidateCommands(t *testing.T) {
 		t.Fatalf("valid batch rejected: %v", err)
 	}
 }
+
+// A timer that fires while a task is started can still be canceled by that task: the worker
+// had not seen the fire. Both events land; replay resolves the timer as canceled.
+func TestCancelTimerThatFiredDuringTask(t *testing.T) {
+	r := newRun(t, 0)
+	r.complete(r.startWFT(), StartTimer{TimerID: "t", Duration: time.Minute})
+	ref := r.out.Timers[0].Ref
+	r.must(func(m *Machine) error { return m.Signal("go", nil, "") })
+	seq := r.startWFT()
+	r.must(func(m *Machine) error { m.FireTimer(ref); return nil })
+	r.must(func(m *Machine) error { m.FireTimer(ref); return nil }) // duplicate fire
+	r.complete(seq, CancelTimer{TimerID: "t"})
+	r.want(EventWorkflowExecutionStarted, EventWorkflowTaskScheduled, EventWorkflowTaskStarted, EventWorkflowTaskCompleted,
+		EventTimerStarted, EventWorkflowExecutionSignaled, EventWorkflowTaskScheduled, EventWorkflowTaskStarted,
+		EventWorkflowTaskCompleted, EventTimerCanceled, EventTimerFired, EventWorkflowTaskScheduled)
+	if len(r.s.Timers) != 0 {
+		t.Fatalf("timer left pending: %+v", r.s.Timers)
+	}
+}

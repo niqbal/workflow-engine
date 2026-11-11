@@ -100,6 +100,9 @@ type TimerInfo struct {
 	TimerID        string    `json:"timerID"`
 	StartedEventID int64     `json:"startedEventID"`
 	FireAt         time.Time `json:"fireAt"`
+	// Fired is set when the timer fired while a workflow task was started: its TimerFired is
+	// buffered, and the worker may still cancel it in that task (both events then land).
+	Fired bool `json:"fired,omitempty"`
 }
 
 // BufferedEvent is an event held while a workflow task is started (SPEC §4.2, D12).

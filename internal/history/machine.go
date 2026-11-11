@@ -147,6 +147,11 @@ func (m *Machine) appendPatched(attrs []Attributes) {
 }
 
 func (m *Machine) flushBuffered() bool {
+	for _, id := range xsync.SortedKeys(m.S.Timers) {
+		if m.S.Timers[id].Fired {
+			delete(m.S.Timers, id)
+		}
+	}
 	if len(m.S.Buffered) == 0 {
 		return false
 	}
@@ -529,12 +534,14 @@ func (m *Machine) FireTimer(ref TimerRef) {
 	switch ref.Kind {
 	case TimerUser:
 		t := m.S.Timers[ref.TimerID]
-		if t == nil || t.StartedEventID != ref.EventID {
+		if t == nil || t.StartedEventID != ref.EventID || t.Fired {
 			return
 		}
-		delete(m.S.Timers, ref.TimerID)
 		if m.deliver(TimerFired{TimerID: ref.TimerID, StartedEventID: t.StartedEventID}) {
+			delete(m.S.Timers, ref.TimerID)
 			m.scheduleWorkflowTask()
+		} else {
+			t.Fired = true // buffered: stays cancellable until its event lands
 		}
 	case TimerActivityStartToClose:
 		a := m.S.Activities[ref.EventID]
