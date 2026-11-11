@@ -480,6 +480,8 @@ func activityNonRetryable(t *testing.T, h Harness) {
 	if f := evs[6].Attrs.(history.ActivityTaskFailed); f.Failure.Type != "Fatal" || f.Attempt != 1 {
 		fail(t, "failed attrs %+v", f)
 	}
+	// Finish wf so its pending workflow task does not sit ahead of wf2's on the shared queue.
+	complete(t, h, mustPollWF(t, h), history.CompleteWorkflow{})
 	// The activity itself can also refuse retries.
 	runToActivity(t, h, "wf2", sched("a1"))
 	at := mustPollAct(t, h)
