@@ -167,3 +167,46 @@ Decisions made while writing the contracts, folded back into SPEC §4.2, §12 an
 - The store treats events and mutable state as opaque bytes; `GetLatestRun` replaces
   `GetOpenRunByWorkflowID` (start dedup needs closed runs too).
 - New error code `workflow_closed`; activity failures carry an explicit `NonRetryable` flag.
+
+## 2026-11-11 — Step 12: WI-010, the deterministic runtime
+
+`internal/simrt`: every task is a goroutine, but a baton lets exactly one run at a time, and it
+switches only at yield points (`Yield`, `Lock`, `Cond` waits, clock waits). A seeded RNG picks
+the next runnable task; when none is runnable the virtual clock jumps to the next timer.
+`CheckDeterministic` runs a scenario N times with one seed and reports the first trace
+difference. Tests: identical traces over 50 runs, different seeds explore different
+schedules, a planted map-order dependency is caught, 30 virtual days run in under 2 s, task
+panics surface, `Close` frees parked goroutines. `xsync.Runtime` gained `Yield` so Store and
+Transport calls can be yield points. CI caught that the production runtime was missing it.
+
+## 2026-11-11 — Step 13: Onboard the factory, first jobs
+
+- `factory.yaml` written by hand from the `asf init` draft: Claude Code provider, absolute
+  Go 1.27 path in every command (agents' PATH has the old Go), tier rules from SPEC §15.2,
+  contract suites declared as tests so agents cannot edit them, intake from `factory/ready`.
+  `AGENTS.md` states the determinism rules and that contracts are fixed. `asf doctor`: healthy.
+- **WI-016 (matching): delivered and merged.** 9 implementer turns, tester, reviewer and
+  security all passed; $5.12 at list price. Reviewed by hand before merging: xsync only,
+  deterministic under simrt, with its own run-twice and at-most-once delivery tests.
+- **WI-011 (memstore): stopped twice at triage, correctly.**
+  1. It asked for the fault-hook API, which the spec had left open. Answered by writing the
+     exact API into the work item.
+  2. It asked to confirm that the dependencies were merged, because it cannot check. Fixed
+     at the source: generated items now say their dependencies are merged (true by
+     construction, since items move to `ready/` only after that).
+  Lesson: a factory item must be fully specified at the API level. Triage is a cheap,
+  useful spec review ($0.00 per stop).
+
+## 2026-11-11 — Step 14: WI-015 state machine and WI-012 dispatcher, by hand
+
+- **WI-015** `internal/history/machine.go`: every server-side transition as a pure function
+  that returns events, timer requests and dispatches. This moved the hard rules (buffering,
+  rejected close, transient workflow-task retries, attempt-bound timers, dedup order,
+  schedule-to-close) out of the factory items. WI-017 to WI-022 now only persist its output,
+  and their issues say so. 13 table tests, including one illegal transition per kind.
+- **WI-012** `internal/engine`: the workflow coroutine dispatcher, same baton technique as
+  simrt but in fixed creation order. Property test: 1,000 random programs × 50 runs, identical
+  traces, no goroutine leaks (about 4 s).
+- Both times, test failures were bugs in my tests (a timer test fired the wrong timer, and a
+  program generator settled a future twice), not in the code under test. They were fixed in
+  the tests.
