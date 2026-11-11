@@ -10,6 +10,7 @@
 package matching
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -91,6 +92,19 @@ func (m *Matcher) Poll(kind Kind, name string, deadline time.Time) (t store.Task
 		return c.TryReceive()
 	}
 	return c.Receive(deadline)
+}
+
+// PollCtx is Poll that also returns ok=false as soon as ctx is done (xsync.Chan.ReceiveCtx).
+// Under simulation, pass a context that is never canceled asynchronously.
+func (m *Matcher) PollCtx(ctx context.Context, kind Kind, name string, deadline time.Time) (t store.Task, ok bool) {
+	c := m.queue(name).of(kind)
+	if ctx.Err() != nil {
+		return t, false
+	}
+	if !deadline.After(m.rt.Clock().Now()) {
+		return c.TryReceive()
+	}
+	return c.ReceiveCtx(ctx, deadline)
 }
 
 // Len returns the number of tasks waiting in the kind FIFO of task queue name.

@@ -19,16 +19,7 @@ func (s *Server) Service() api.Service { return s }
 
 // WI-017 (start, signal, terminate, describe, history) lives in workflows.go.
 
-// WI-018: workflow tasks (poll, complete, fail).
-func (s *Server) PollWorkflowTask(ctx context.Context, r api.PollRequest) (*api.WorkflowTask, error) {
-	return nil, errNotBuilt
-}
-func (s *Server) CompleteWorkflowTask(ctx context.Context, r api.CompleteWorkflowTaskRequest) error {
-	return errNotBuilt
-}
-func (s *Server) FailWorkflowTask(ctx context.Context, r api.FailWorkflowTaskRequest) error {
-	return errNotBuilt
-}
+// WI-018 (workflow tasks: poll, complete, fail) lives in workflowtasks.go.
 
 // WI-019: activity tasks (poll, complete, fail).
 func (s *Server) PollActivityTask(ctx context.Context, r api.PollRequest) (*api.ActivityTask, error) {
