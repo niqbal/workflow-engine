@@ -142,6 +142,9 @@ func testCreateInvalid(t *testing.T, s store.Store) {
 	k := newRun(t, s, f, "wf", "r1")
 	_, err := s.CreateRun(ctx, f, store.NewRun{Key: k, Events: events(1, 1), State: []byte("x")})
 	wantErr(t, err, store.ErrAlreadyExists)
+	// A second run for the same workflow ID is rejected, whatever its run ID.
+	_, err = s.CreateRun(ctx, f, store.NewRun{Key: store.RunKey{Shard: 0, WorkflowID: "wf", RunID: "other"}, Events: events(1, 1), State: []byte("x")})
+	wantErr(t, err, store.ErrAlreadyExists)
 	k2 := store.RunKey{Shard: 0, WorkflowID: "wf2", RunID: "r"}
 	_, err = s.CreateRun(ctx, f, store.NewRun{Key: k2, Events: events(2, 1), State: []byte("x")})
 	wantErr(t, err, store.ErrInvalid)
@@ -160,9 +163,9 @@ func testLatestRun(t *testing.T, s store.Store) {
 	if got := must(s.GetLatestRun(ctx, 0, "wf"))(t); got != k1 {
 		t.Fatalf("closed run must still be latest, got %+v", got)
 	}
-	k2 := newRun(t, s, f, "wf", "r2")
-	if got := must(s.GetLatestRun(ctx, 0, "wf"))(t); got != k2 {
-		t.Fatalf("want newest run %+v, got %+v", k2, got)
+	// v1 never creates a second run for a workflow ID, so the closed run stays the latest.
+	if got := must(s.GetLatestRun(ctx, 0, "wf"))(t); got != k1 {
+		t.Fatalf("closed run must remain latest, got %+v", got)
 	}
 }
 

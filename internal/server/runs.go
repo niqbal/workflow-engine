@@ -82,6 +82,8 @@ func storeErr(err error) error {
 		return fmt.Errorf("%w: %v", api.ErrNotFound, err)
 	case errors.Is(err, store.ErrFenced):
 		return fmt.Errorf("%w: %v", api.ErrNotOwner, err)
+	case errors.Is(err, store.ErrAlreadyExists):
+		return fmt.Errorf("%w: %v", api.ErrAlreadyStarted, err)
 	case errors.Is(err, store.ErrConflict):
 		return fmt.Errorf("%w: %v", api.ErrUnavailable, err)
 	}

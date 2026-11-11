@@ -268,6 +268,11 @@ func (s *Store) CreateRun(ctx context.Context, f store.Fence, r store.NewRun) ([
 			if err := s.checkFence(f, r.Key.Shard); err != nil {
 				return err
 			}
+			if _, dup := s.latest[workflowKey{r.Key.Shard, r.Key.WorkflowID}]; dup {
+				if _, same := s.runs[r.Key]; !same {
+					return fmt.Errorf("%w: workflow %q already has a run on shard %d", store.ErrAlreadyExists, r.Key.WorkflowID, r.Key.Shard)
+				}
+			}
 			if _, ok := s.runs[r.Key]; ok {
 				return store.ErrAlreadyExists
 			}

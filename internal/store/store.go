@@ -116,7 +116,9 @@ type Store interface {
 	// RenewShard extends the lease if f is still current, else ErrFenced.
 	RenewShard(ctx context.Context, f Fence, now time.Time, lease time.Duration) error
 
-	// CreateRun writes a new run. ErrAlreadyExists if the RunKey exists.
+	// CreateRun writes a new run. ErrAlreadyExists if the RunKey exists or the shard already
+	// has a run with the same WorkflowID: v1 uses a workflow ID once (SPEC §8.4), and enforcing
+	// it here makes concurrent starts safe even without a node-local lock.
 	CreateRun(ctx context.Context, f Fence, r NewRun) ([]Task, error)
 	// UpdateRun applies u if f is current (else ErrFenced) and the run's DBVersion equals
 	// u.ExpectedDBVersion (else ErrConflict). It returns the new DBVersion and the written
