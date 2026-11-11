@@ -1,0 +1,86 @@
+# factory.yaml - the trust boundary for agents working on this repo (SPEC §15.2).
+# Drafted with `asf init`, then edited by hand. Agents cannot edit this file.
+
+version: 1
+project:
+  name: workflow-engine
+  default_branch: main
+  stacks: [go]
+  remote: git@github.com:niqbal/workflow-engine.git
+
+# The system Go is 1.19; this repo needs the toolchain in ~/sdk (BUILD-LOG Step 10).
+packages:
+- name: go
+  root: .
+  triggers: ['**']
+  ignore: []
+  commands:
+    test: /Users/nawabiqbal/sdk/go1.27.4/bin/go test -race -count=1 ./... {args}
+    lint: /Users/nawabiqbal/sdk/go1.27.4/bin/go vet ./... && test -z "$(/Users/nawabiqbal/sdk/go1.27.4/bin/gofmt -l .)"
+    build: /Users/nawabiqbal/sdk/go1.27.4/bin/go build ./...
+
+# Contract suites are tests even though they are not _test.go files: agents may not edit them.
+tests:
+  globs: ['**/*_test.go', 'contracttest/**', 'internal/store/storetest/**']
+
+# Work items wait in factory/backlog and are moved to factory/ready when their dependencies
+# are merged (the factory does not order work).
+intake:
+  local:
+    enabled: true
+    path: factory/ready
+  github_issues:
+    enabled: false
+
+execution:
+  provider: local_worktree
+  clone_dirs: []
+  setup: []
+
+# Tier comes only from these rules (items carry no tier labels; SPEC §15.2).
+tiers:
+  rules:
+  - paths: [docs/**, '**/*.md']
+    tier: 0
+  - paths: [cmd/**, examples/**, bench/**]
+    tier: 1
+  - paths: [internal/server/**, internal/store/**, internal/httpapi/**, worker/**, client/**]
+    tier: 2
+  - paths: [internal/engine/**, internal/history/**, internal/shard/**, internal/xsync/**,
+            internal/simrt/**, internal/lint/**, internal/server/api/**,
+            internal/store/storetest/**, internal/store/store.go, wf/**, sim/**, contracttest/**,
+            factory/**, factory.yaml, Makefile, go.mod]
+    tier: 3
+  classifier_default: 2
+
+permissions:
+  extra_allowed_commands: ["/Users/nawabiqbal/sdk/go1.27.4/bin/go doc", "/Users/nawabiqbal/sdk/go1.27.4/bin/go list", "/Users/nawabiqbal/sdk/go1.27.4/bin/go version"]
+
+models:
+  provider: claude_code
+  binary: "/Users/nawabiqbal/Library/Application Support/Claude/claude-code/2.1.317/534c07a0b5d9/claude.app/Contents/MacOS/claude"
+  timeout_s: 900
+  roles:
+    triage: {model: claude-haiku-5-5, effort: low}
+    implementer: {model: claude-opus-5-5, effort: high}
+    tester: {model: claude-opus-5-5, effort: medium}
+    reviewer: {model: claude-opus-5-5, effort: high}
+    security: {model: claude-sonnet-5-5, effort: medium}
+    ci_fixer: {model: claude-opus-5-5, effort: medium}
+  max_turns: {implementer: 80, tester: 50, reviewer: 30, security: 20, ci_fixer: 30}
+
+# Budgets are measured in Claude Code's reported list-price cost per call.
+budgets:
+  tier_1: {usd: 6.0, minutes: 60}
+  tier_2: {usd: 15.0, minutes: 150}
+  tier_3: {usd: 20.0, minutes: 180}
+  monthly_cap_usd: 150.0
+
+context:
+  instruction_files: [AGENTS.md, README.md]
+delivery:
+  provider: local_git
+
+autonomy:
+  shadow: true
+  max_merge_tier: -1
