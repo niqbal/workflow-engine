@@ -69,20 +69,32 @@ permissions:
   extra_allowed_commands: ["/Users/nawabiqbal/sdk/go1.27.4/bin/go doc", "/Users/nawabiqbal/sdk/go1.27.4/bin/go list", "/Users/nawabiqbal/sdk/go1.27.4/bin/go version"]
 
 models:
-  provider: claude_code
-  timeout_s: 900
-  roles:
-    triage: {model: claude-haiku-5-5, effort: low}
-    implementer: {model: claude-opus-5-5, effort: high}
-    tester: {model: claude-opus-5-5, effort: medium}
-    reviewer: {model: claude-opus-5-5, effort: high}
-    security: {model: claude-sonnet-5-5, effort: medium}
-    ci_fixer: {model: claude-opus-5-5, effort: medium}
+  # Two backends on the owner's subscriptions. Cursor (larger balance) does the heavy lifting;
+  # Claude reviews, so a different model family checks the work. Either fails over to the other
+  # when it hits a usage limit (asf scheduler).
+  provider: pool
+  backends:
+    cursor:
+      provider: cursor_cli
+      timeout_s: 900
+      default: {model: gpt-5.3-codex}
+      roles:
+        implementer: {model: gpt-5.3-codex-high}
+        triage: {model: gpt-5.3-codex-low}
+    claude:
+      provider: claude_code
+      timeout_s: 900
+      default: {model: claude-opus-5-5, effort: medium}
+      roles:
+        triage: {model: claude-haiku-5-5, effort: low}
+        implementer: {model: claude-opus-5-5, effort: high}
+        reviewer: {model: claude-opus-5-5, effort: high}
+        security: {model: claude-sonnet-5-5, effort: medium}
+  routing:
+    default: [cursor, claude]
+    reviewer: [claude, cursor]
+    security: [claude, cursor]
   max_turns: {implementer: 80, tester: 50, reviewer: 30, security: 20, ci_fixer: 30}
-
-# Models run through the Claude Code CLI on the owner's subscription, so dollar figures are
-# Claude Code's list-price estimates, not spend. Caps are set high so they never pause a job;
-# the real constraint is the subscription's usage window. Time limits allow for long jobs.
 budgets:
   tier_0: {usd: 100.0, minutes: 600}
   tier_1: {usd: 100.0, minutes: 600}
