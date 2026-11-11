@@ -147,7 +147,7 @@ Acceptance:
 
 ### WI-017 History service: start, signal, terminate (#14)
 
-Start with requestID dedup against the latest run open or closed; signal with dedup before the closed check; terminate. One store write each (SPEC §8.1, §8.4).
+Start with requestID dedup against the latest run open or closed; signal with dedup before the closed check; terminate. One store write each (SPEC §8.1, §8.4). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
 
 Acceptance:
 - contracttest scenarios for start, signal and terminate pass
@@ -156,7 +156,7 @@ Acceptance:
 
 ### WI-018 History service: workflow task path (#15)
 
-Record started, complete with commands, fail, buffered events while started, rejected close when buffered events exist (SPEC §4.2, §8.2).
+Record started, complete with commands, fail, buffered events while started, rejected close when buffered events exist (SPEC §4.2, §8.2). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
 
 Acceptance:
 - contracttest workflow-task scenarios pass, including buffered events and rejected close
@@ -164,7 +164,7 @@ Acceptance:
 
 ### WI-019 History service: activity path (#16)
 
-Record started, complete, fail; stale attempt rejected; retry state and backoff timer task written (SPEC §8.3).
+Record started, complete, fail; stale attempt rejected; retry state and backoff timer task written (SPEC §8.3). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
 
 Acceptance:
 - contracttest activity scenarios pass
@@ -172,7 +172,7 @@ Acceptance:
 
 ### WI-020 Transfer processor with ack level and redispatch (#17)
 
-Read from the lowest undeleted task, push to matching, delete on start, redispatch unstarted workflow and activity tasks every redispatchInterval (SPEC §8.1-8.3).
+Read from the lowest undeleted task, push to matching, delete on start, redispatch unstarted workflow and activity tasks every redispatchInterval (SPEC §8.1-8.3). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
 
 Acceptance:
 - contracttest redispatch scenarios pass
@@ -180,7 +180,7 @@ Acceptance:
 
 ### WI-021 Timer processor core (#18)
 
-Per-shard min-heap with loadAheadWindow; conditional fire bound to the armed reference and attempt; delete after fire (SPEC §10).
+Per-shard min-heap with loadAheadWindow; conditional fire bound to the armed reference and attempt; delete after fire (SPEC §10). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
 
 Acceptance:
 - Never fires before fireAt on the simulated clock
@@ -189,7 +189,7 @@ Acceptance:
 
 ### WI-022 Timeouts and retry backoff (#19)
 
-Activity start-to-close and schedule-to-close, workflow-task timeout, workflow execution timeout, retry backoff per RetryPolicy.
+Activity start-to-close and schedule-to-close, workflow-task timeout, workflow execution timeout, retry backoff per RetryPolicy. All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.
 
 Acceptance:
 - contracttest timeout scenarios pass, including an old attempt's timeout being a no-op

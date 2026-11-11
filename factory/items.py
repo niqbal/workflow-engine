@@ -54,22 +54,22 @@ ITEMS = [
   "internal/server/matching: per task-queue FIFO of workflow and activity tasks; long-poll bounded by the Clock; xsync only.",
   ["Poll returns at once when a task is queued, waits otherwise, returns empty at deadline", "Tests use the simulated clock, no real sleeps", "Lint and run-twice trace check pass"]),
  ("WI-017","M1","factory",2,"History service: start, signal, terminate",["WI-011","WI-015","WI-005"],
-  "Start with requestID dedup against the latest run open or closed; signal with dedup before the closed check; terminate. One store write each (SPEC §8.1, §8.4).",
+  "Start with requestID dedup against the latest run open or closed; signal with dedup before the closed check; terminate. One store write each (SPEC §8.1, §8.4). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.",
   ["contracttest scenarios for start, signal and terminate pass", "Every state change is one UpdateRun (counting store wrapper)", "No changes to contracttest"]),
  ("WI-018","M1","factory",2,"History service: workflow task path",["WI-017"],
-  "Record started, complete with commands, fail, buffered events while started, rejected close when buffered events exist (SPEC §4.2, §8.2).",
+  "Record started, complete with commands, fail, buffered events while started, rejected close when buffered events exist (SPEC §4.2, §8.2). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.",
   ["contracttest workflow-task scenarios pass, including buffered events and rejected close", "No changes to contracttest"]),
  ("WI-019","M1","factory",2,"History service: activity path",["WI-017"],
-  "Record started, complete, fail; stale attempt rejected; retry state and backoff timer task written (SPEC §8.3).",
+  "Record started, complete, fail; stale attempt rejected; retry state and backoff timer task written (SPEC §8.3). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.",
   ["contracttest activity scenarios pass", "No changes to contracttest"]),
  ("WI-020","M1","factory",2,"Transfer processor with ack level and redispatch",["WI-016","WI-018","WI-019"],
-  "Read from the lowest undeleted task, push to matching, delete on start, redispatch unstarted workflow and activity tasks every redispatchInterval (SPEC §8.1-8.3).",
+  "Read from the lowest undeleted task, push to matching, delete on start, redispatch unstarted workflow and activity tasks every redispatchInterval (SPEC §8.1-8.3). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.",
   ["contracttest redispatch scenarios pass", "With variable commit latency in memstore, no task is ever skipped (new test)"]),
  ("WI-021","M1","factory",2,"Timer processor core",["WI-018"],
-  "Per-shard min-heap with loadAheadWindow; conditional fire bound to the armed reference and attempt; delete after fire (SPEC §10).",
+  "Per-shard min-heap with loadAheadWindow; conditional fire bound to the armed reference and attempt; delete after fire (SPEC §10). All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.",
   ["Never fires before fireAt on the simulated clock", "Crash between fire and delete produces no second TimerFired", "contracttest timer scenarios pass"]),
  ("WI-022","M1","factory",2,"Timeouts and retry backoff",["WI-021","WI-019"],
-  "Activity start-to-close and schedule-to-close, workflow-task timeout, workflow execution timeout, retry backoff per RetryPolicy.",
+  "Activity start-to-close and schedule-to-close, workflow-task timeout, workflow execution timeout, retry backoff per RetryPolicy. All decisions come from history.Machine (internal/history/machine.go, WI-015): load MutableState, call one Machine method, then write Machine.Out (events, TimerRequests as timer tasks, DispatchRefs as transfer tasks) and the new state in one Store.UpdateRun. Do not re-implement its rules.",
   ["contracttest timeout scenarios pass, including an old attempt's timeout being a no-op"]),
  ("WI-023","M1","factory",2,"HTTP API and Go client",["WI-017","WI-016"],
   "internal/httpapi endpoints from SPEC §13.1 (no heartbeat) with JSON error codes; client package with a Run handle.",
@@ -154,6 +154,7 @@ def front(it):
 
 def main():
     inbox = ROOT / "factory" / "backlog"
+    moved = {p.stem for d in ("ready", "done") for p in (ROOT / "factory" / d).glob("*.md")}
     (ROOT / "factory" / "ready").mkdir(parents=True, exist_ok=True)
     (ROOT / "factory" / "ready" / ".gitkeep").touch()
     inbox.mkdir(parents=True, exist_ok=True)
@@ -178,7 +179,7 @@ def main():
             ref = f" (#{ISSUES[i]})" if i in ISSUES else ""
             doc += [f"### {i} {ti}{ref}", "", body, "", "Acceptance:"] + [f"- {a}" for a in acc] + [""]
         for it in its:
-            if it[2] == "factory":
+            if it[2] == "factory" and it[0] not in moved:
                 (inbox / f"{it[0]}.md").write_text(front(it))
     h = sum(1 for x in ITEMS if x[2]=="human"); f = len(ITEMS)-h
     doc.insert(6, f"**{len(ITEMS)} items: {h} human, {f} factory.**\n")
