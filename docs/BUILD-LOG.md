@@ -261,3 +261,20 @@ Transport calls can be yield points. CI caught that the production runtime was m
 - **Resume:** after the limit resets, run `asf retry JOB-9f9448` and
   `asf run --job JOB-9f9448` (it re-enters at reviewing), then check JOB-0c9d99 the same way.
   Next queue order: WI-020, then WI-018 and WI-021, then WI-019.
+
+## 2026-11-11 — Step 18: Resuming after the limit; WI-017 merged; a race found by the reviewer
+
+- Paused jobs hit their *time* budget on resume, because asf measures wall time since the job
+  started, including hours paused on the usage limit. **Factory fix:** `asf resume
+  --extra-minutes` (committed on `claude-code-provider`, with a test).
+- **WI-017.** The factory reviewer found a real race: two concurrent `StartWorkflow` calls for
+  one workflow ID (a client retry while the first call is in flight) could both create runs,
+  which is the double-refund case in SPEC §8.4. The implementer fixed it with a per-shard start
+  lock, then the reviewer blocked again because the fix touched hand-owned `server.go`.
+  Correct governance. As owner I reviewed the one-line change, approved it, and merged the
+  job's work with the sign-off recorded. $22.74. Contract board: **2/26**.
+- **Hardening by hand:** the store contract now rejects a second run for the same workflow ID
+  (v1 uses an ID once), so the race is impossible at the storage layer too. storetest case
+  added, memstore updated, WI-030 required to use a unique constraint. The paused WI-030 job
+  predated this contract and had written no code, so it was rejected and re-queued fresh.
+- Queued: WI-030 (pgstore) and WI-020 (transfer processor).
