@@ -1,0 +1,225 @@
+[
+ {
+  "id": 1,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowExecutionStarted",
+  "attrs": {
+   "workflowType": "W",
+   "input": {
+    "Ticket": "T-1"
+   },
+   "taskQueue": "q"
+  }
+ },
+ {
+  "id": 2,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskScheduled",
+  "attrs": {
+   "taskQueue": "q",
+   "attempt": 1
+  }
+ },
+ {
+  "id": 3,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskStarted",
+  "attrs": {
+   "scheduledEventID": 2,
+   "workerIdentity": "wftest"
+  }
+ },
+ {
+  "id": 4,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskCompleted",
+  "attrs": {
+   "scheduledEventID": 2,
+   "startedEventID": 3
+  }
+ },
+ {
+  "id": 5,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "ActivityTaskScheduled",
+  "attrs": {
+   "activityID": "1",
+   "activityType": "DraftReply",
+   "input": {
+    "Ticket": "T-1"
+   },
+   "taskQueue": "q",
+   "startToCloseTimeout": 60000000000,
+   "retryPolicy": {}
+  }
+ },
+ {
+  "id": 6,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "ActivityTaskStarted",
+  "attrs": {
+   "scheduledEventID": 5,
+   "attempt": 1,
+   "workerIdentity": "wftest"
+  }
+ },
+ {
+  "id": 7,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "ActivityTaskCompleted",
+  "attrs": {
+   "scheduledEventID": 5,
+   "startedEventID": 6,
+   "result": {
+    "Text": "re: T-1"
+   }
+  }
+ },
+ {
+  "id": 8,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskScheduled",
+  "attrs": {
+   "taskQueue": "q",
+   "attempt": 1
+  }
+ },
+ {
+  "id": 9,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskStarted",
+  "attrs": {
+   "scheduledEventID": 8,
+   "workerIdentity": "wftest"
+  }
+ },
+ {
+  "id": 10,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskCompleted",
+  "attrs": {
+   "scheduledEventID": 8,
+   "startedEventID": 9
+  }
+ },
+ {
+  "id": 11,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "TimerStarted",
+  "attrs": {
+   "timerID": "t1",
+   "fireAt": "2026-01-04T00:00:00Z"
+  }
+ },
+ {
+  "id": 12,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowExecutionSignaled",
+  "attrs": {
+   "signalName": "approval",
+   "payload": {
+    "Approved": true,
+    "Reason": ""
+   }
+  }
+ },
+ {
+  "id": 13,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskScheduled",
+  "attrs": {
+   "taskQueue": "q",
+   "attempt": 1
+  }
+ },
+ {
+  "id": 14,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskStarted",
+  "attrs": {
+   "scheduledEventID": 13,
+   "workerIdentity": "wftest"
+  }
+ },
+ {
+  "id": 15,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskCompleted",
+  "attrs": {
+   "scheduledEventID": 13,
+   "startedEventID": 14
+  }
+ },
+ {
+  "id": 16,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "ActivityTaskScheduled",
+  "attrs": {
+   "activityID": "2",
+   "activityType": "SendReply",
+   "input": {
+    "Text": "re: T-1"
+   },
+   "taskQueue": "q",
+   "startToCloseTimeout": 60000000000,
+   "retryPolicy": {}
+  }
+ },
+ {
+  "id": 17,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "ActivityTaskStarted",
+  "attrs": {
+   "scheduledEventID": 16,
+   "attempt": 1,
+   "workerIdentity": "wftest"
+  }
+ },
+ {
+  "id": 18,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "ActivityTaskCompleted",
+  "attrs": {
+   "scheduledEventID": 16,
+   "startedEventID": 17,
+   "result": null
+  }
+ },
+ {
+  "id": 19,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskScheduled",
+  "attrs": {
+   "taskQueue": "q",
+   "attempt": 1
+  }
+ },
+ {
+  "id": 20,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskStarted",
+  "attrs": {
+   "scheduledEventID": 19,
+   "workerIdentity": "wftest"
+  }
+ },
+ {
+  "id": 21,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowTaskCompleted",
+  "attrs": {
+   "scheduledEventID": 19,
+   "startedEventID": 20
+  }
+ },
+ {
+  "id": 22,
+  "time": "2026-01-01T00:00:00Z",
+  "type": "WorkflowExecutionCompleted",
+  "attrs": {
+   "result": {
+    "Status": "sent"
+   }
+  }
+ }
+]
