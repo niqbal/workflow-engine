@@ -56,9 +56,10 @@ type Server struct {
 	mu     xsync.Locker
 	rand   rnd.Rand
 	fences map[int]store.Fence
-	starts map[int]xsync.Locker // per-shard start serialization, created on demand (workflows.go)
 
-	transfer map[int]*transferShard // per-shard transfer processor state, created on demand (transfer.go)
+	// sub holds per-subsystem state. Its type lives in subsystems.go, which work items may
+	// extend; this file stays hand-owned.
+	sub subsystems
 }
 
 // New builds a node. r provides run IDs; give each node its own seed.

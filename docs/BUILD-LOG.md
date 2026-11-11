@@ -278,3 +278,20 @@ Transport calls can be yield points. CI caught that the production runtime was m
   added, memstore updated, WI-030 required to use a unique constraint. The paused WI-030 job
   predated this contract and had written no code, so it was rejected and re-queued fresh.
 - Queued: WI-030 (pgstore) and WI-020 (transfer processor).
+
+## 2026-11-11 — Step 19: Budgets off, WI-030 and WI-020 merged, an extension point
+
+- Owner decision: runs go through the Claude Code CLI on a subscription, so dollar figures are
+  estimates, not spend. `factory.yaml` budgets no longer pause jobs; the real constraint is the
+  subscription's usage window.
+- **WI-030 (pgstore), $27.18.** Owner review of the migration (tier 3): fence check `FOR SHARE`
+  in every write transaction, `db_version` compare-and-swap, unique `(shard, workflow_id)`.
+  The suite passes against local Postgres 15 outside the sandbox with `-race`, and no test
+  schemas are left behind.
+- **WI-020 (transfer processor), $18.26.** The ack level never passes an unseen task ID
+  (explicit gap tracking), so late commits are never skipped, which is the outbox hole from
+  the spec review.
+- Both WI-017 and WI-020 had to add per-shard state to the hand-owned `Server` struct, so each
+  needed owner sign-off. Fixed at the source: `internal/server/subsystems.go` is a
+  factory-owned extension point, `Server` embeds it, and AGENTS.md says to use it.
+- Queued WI-018 (workflow-task handlers, 9 contract scenarios).

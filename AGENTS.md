@@ -18,3 +18,6 @@ Read `docs/SPEC.md` for what the system must do. The work item tells you which s
 5. **Tests.** New behavior gets new tests in new `_test.go` files. Use `simrt` (virtual time)
    rather than real sleeps; a test that sleeps on the wall clock is a defect.
 6. **Style.** `gofmt` clean, `go vet` clean, no new dependencies unless the work item says so.
+7. **Server state.** `internal/server/server.go` and `runs.go` are hand-owned. State a handler
+   or processor keeps on the Server goes in a new field of `subsystems`
+   (`internal/server/subsystems.go`), never in the `Server` struct.

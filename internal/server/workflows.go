@@ -39,13 +39,13 @@ func (s *Server) latestRun(ctx context.Context, workflowID string) (store.RunKey
 func (s *Server) startLock(shard int) xsync.Locker {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.starts == nil {
-		s.starts = map[int]xsync.Locker{}
+	if s.sub.starts == nil {
+		s.sub.starts = map[int]xsync.Locker{}
 	}
-	l, ok := s.starts[shard]
+	l, ok := s.sub.starts[shard]
 	if !ok {
 		l = s.rt.NewLocker()
-		s.starts[shard] = l
+		s.sub.starts[shard] = l
 	}
 	return l
 }

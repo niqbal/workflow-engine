@@ -43,13 +43,13 @@ type transferShard struct {
 func (s *Server) transferShard(shard int) *transferShard {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.transfer == nil {
-		s.transfer = map[int]*transferShard{}
+	if s.sub.transfer == nil {
+		s.sub.transfer = map[int]*transferShard{}
 	}
-	ts, ok := s.transfer[shard]
+	ts, ok := s.sub.transfer[shard]
 	if !ok {
 		ts = &transferShard{mu: s.rt.NewLocker(), ack: 1, pushed: map[int64]time.Time{}}
-		s.transfer[shard] = ts
+		s.sub.transfer[shard] = ts
 	}
 	return ts
 }
