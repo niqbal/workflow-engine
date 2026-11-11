@@ -21,16 +21,7 @@ func (s *Server) Service() api.Service { return s }
 
 // WI-018 (workflow tasks: poll, complete, fail) lives in workflowtasks.go.
 
-// WI-019: activity tasks (poll, complete, fail).
-func (s *Server) PollActivityTask(ctx context.Context, r api.PollRequest) (*api.ActivityTask, error) {
-	return nil, errNotBuilt
-}
-func (s *Server) CompleteActivityTask(ctx context.Context, r api.CompleteActivityTaskRequest) error {
-	return errNotBuilt
-}
-func (s *Server) FailActivityTask(ctx context.Context, r api.FailActivityTaskRequest) error {
-	return errNotBuilt
-}
+// WI-019 (activity tasks: poll, complete, fail) lives in activitytasks.go.
 
 // Settle runs transfer and timer processing for every owned shard at the current time until
 // there is nothing left to do (WI-020 transfer, WI-021 timers). Production runs the same
