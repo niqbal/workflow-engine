@@ -61,5 +61,25 @@ def main():
             issues[t] = api("POST", "issues", title=t, body=body, labels=["tracking"], milestone=ms[f"{m} {n}"])["number"]
     print(json.dumps({"items": len(mapping), "tracking": len(NAMES)}))
 
+def sync_done():
+    """Write factory/done/<WI>.md for every item whose GitHub issue is closed, so dependency
+    checks (scripts/factory next, the factory console) see hand-owned work as finished too."""
+    mapping = json.loads(MAP.read_text())
+    closed = {x["number"] for x in json.loads(gh("issue", "list", "-R", REPO, "--state", "closed", "-L", "500",
+                                                  "--json", "number"))}
+    done = ROOT / "factory" / "done"
+    done.mkdir(exist_ok=True)
+    added = []
+    for wid, num in mapping.items():
+        marker = done / f"{wid}.md"
+        if num in closed and not marker.exists():
+            marker.write_text(f"{wid}: done (GitHub #{num} closed)\n")
+            added.append(wid)
+    print("done markers added: " + (", ".join(added) or "none"))
+
+
 if __name__ == "__main__":
-    main()
+    if "--sync-done" in sys.argv:
+        sync_done()
+    else:
+        main()

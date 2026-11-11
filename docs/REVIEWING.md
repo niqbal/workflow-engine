@@ -4,7 +4,28 @@ The software factory (`asf`) builds work items in sandboxes and stops for you in
 predictable ways. This page says what to do in each case. `scripts/factory` does the mechanical
 parts; run everything from `~/work/workflow-engine`.
 
-## The loop
+## Start here: the console
+
+```bash
+~/work/software-factory/.venv/bin/asf --repo ~/work/workflow-engine ui --open
+```
+
+It opens http://127.0.0.1:8787. Everything below is a button there:
+- **Needs you:** jobs ready to review, plus anything that stopped, with the reason.
+- **Working:** what agents are doing right now, with a live log.
+- **Backlog:** each item is shown as unblocked or blocked by its `depends_on`, with a Queue
+  button.
+- **Job details:** owner-review lines, reviewer findings, diff, report and timeline.
+- **Actions:** Merge, Send back with notes, Reject, Resume, Retry, Start over.
+
+The header has **Run queue** (agents work through everything queued) and **Pause all**.
+The cases below explain what each stop means; the console shows the same reasons.
+
+**Delivered is not done.** A job counts as shipped only after it is merged *and* `make ci`
+passes on main afterwards (`observe.post_merge`). The console notices merges you make with git
+too.
+
+## The loop from a terminal
 
 ```bash
 scripts/factory pending          # 1. what is waiting on me, and why

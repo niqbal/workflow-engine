@@ -361,3 +361,30 @@ Transport calls can be yield points. CI caught that the production runtime was m
 - WI-062 (signed tokens) had stopped asking for exactly this. The owner's decisions are now in
   the item: `Config.TokenKey`, a key generated from the node RNG when unset, and two forged-token
   tests updated to sign with the key. Re-queued.
+
+## 2026-11-11 — Step 23: Delivered is not done; a console for the factory
+
+Owner decisions: the factory must not call work done until it is merged and verified, an
+owner-only change should arrive as a small diff to approve rather than a request to write code,
+and the factory needs a UI.
+
+- **asf states** (software-factory): `delivering → awaiting_review → merged → done`. The
+  factory notices a merge however it is made (git, `scripts/factory merge`, the console);
+  `merged` runs `observe.post_merge` (here: `make ci` on main) and only then marks the job
+  `done`. A deleted branch counts as abandoned.
+- **Metrics count only shipped work:** cost per shipped job (all spend / shipped), waste
+  share, lead time split into agent time, review wait and post-merge verification, and
+  interventions. First honest numbers for this repo: 8 shipped, cost per shipped job $29.77,
+  waste 2%, 17 interventions (2.1 per shipped job).
+- **Owner review:** a parallel session had already changed AGENTS.md so agents make minimal
+  hand-owned changes and list them under `OWNER REVIEW:` instead of stopping (commit 2497c14).
+  asf now records exactly those files' diff plus the notes, and the report and console lead
+  with them. The owner reviews a few lines instead of writing them.
+- **Console:** `asf --repo ~/work/workflow-engine ui --open`. Shows what needs you, what
+  agents are doing, the backlog with dependencies resolved, metrics, and per job the reason,
+  owner-review lines, findings, diff, report and timeline. Every owner action is a button. A
+  reconciler verified the nine jobs that had been merged by hand.
+- This repo: `factory.yaml` uses the `claude` CLI on PATH (2.1.322), declares the backlog and
+  done folders and the post-merge check; items carry `depends_on`;
+  `github_sync.py --sync-done` writes done markers for closed hand-owned items so dependency
+  checks see them.

@@ -29,6 +29,8 @@ intake:
   local:
     enabled: true
     path: factory/ready
+    backlog: factory/backlog   # shown in the console with depends_on resolved
+    done: factory/done
   github_issues:
     enabled: false
 
@@ -68,7 +70,6 @@ permissions:
 
 models:
   provider: claude_code
-  binary: "/Users/nawabiqbal/Library/Application Support/Claude/claude-code/2.1.317/534c07a0b5d9/claude.app/Contents/MacOS/claude"
   timeout_s: 900
   roles:
     triage: {model: claude-haiku-5-5, effort: low}
@@ -97,6 +98,11 @@ limits:
 
 context:
   instruction_files: [AGENTS.md, README.md]
+# Done means verified after the merge, not just delivered: main must still pass.
+observe:
+  provider: none
+  post_merge: ["make ci"]
+
 delivery:
   provider: local_git
 

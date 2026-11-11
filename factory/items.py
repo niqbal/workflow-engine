@@ -157,7 +157,8 @@ ISSUES = _json.loads(_ISSUES.read_text()) if _ISSUES.exists() else {}
 
 def front(it):
     i, m, owner, tier, title, deps, body, acc = it
-    lines = ["---", f"title: \"{i} {title}\"", "kind: task", f"labels: [\"{m}\"]", "acceptance:"]
+    lines = ["---", f"title: \"{i} {title}\"", "kind: task", f"labels: [\"{m}\"]",
+             f"depends_on: [{', '.join(deps)}]", "acceptance:"]
     lines += [f"  - \"{a.replace(chr(34), chr(39))}\"" for a in acc]
     dep_line = (f"Dependencies: {', '.join(deps)}. All of them are already merged on main: items are moved to factory/ready only after their dependencies merge, so do not ask about them."
                 if deps else "Dependencies: none.")
