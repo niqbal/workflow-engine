@@ -141,7 +141,7 @@ func TestTesterTokenWithNonPositiveSeqRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, seq := range []int64{0, -1} {
-		bad, _ := encodeWorkflowTaskToken(workflowTaskToken{Shard: tok.Shard, WorkflowID: tok.WorkflowID, RunID: tok.RunID, Seq: seq})
+		bad, _ := encodeWorkflowTaskToken(s.cfg.TokenKey, workflowTaskToken{Shard: tok.Shard, WorkflowID: tok.WorkflowID, RunID: tok.RunID, Seq: seq})
 		if err := s.CompleteWorkflowTask(ctx, api.CompleteWorkflowTaskRequest{TaskToken: bad}); !errors.Is(err, api.ErrInvalidArgument) {
 			t.Fatalf("seq %d: %v", seq, err)
 		}

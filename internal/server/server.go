@@ -24,6 +24,7 @@ type Config struct {
 	LongPoll           time.Duration // how long a poll waits on the server clock
 	RedispatchInterval time.Duration // re-push unstarted tasks (SPEC §8.2-8.3)
 	LeaseDuration      time.Duration
+	TokenKey           []byte // HMAC key for task tokens; cluster-wide
 }
 
 func (c Config) withDefaults() Config {
@@ -64,8 +65,25 @@ type Server struct {
 
 // New builds a node. r provides run IDs; give each node its own seed.
 func New(rt xsync.Runtime, st store.Store, r rnd.Rand, cfg Config) *Server {
-	return &Server{rt: rt, clk: rt.Clock(), st: st, cfg: cfg.withDefaults(), match: matching.New(rt),
+	cfg = cfg.withDefaults()
+	if len(cfg.TokenKey) == 0 {
+		cfg.TokenKey = generatedTokenKey(r)
+	} else {
+		cfg.TokenKey = append([]byte(nil), cfg.TokenKey...)
+	}
+	return &Server{rt: rt, clk: rt.Clock(), st: st, cfg: cfg, match: matching.New(rt),
 		mu: rt.NewLocker(), rand: r, fences: map[int]store.Fence{}}
+}
+
+func generatedTokenKey(r rnd.Rand) []byte {
+	key := make([]byte, 32)
+	for i := 0; i < len(key); i += 8 {
+		v := uint64(r.Int63())
+		for j := 0; j < 8 && i+j < len(key); j++ {
+			key[i+j] = byte(v >> (8 * j))
+		}
+	}
+	return key
 }
 
 // Start acquires every shard (single-node M1; M4 replaces this with leases and placement).

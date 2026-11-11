@@ -36,6 +36,19 @@ func sameTypes(a, b []history.EventType) bool {
 	return true
 }
 
+func flipTokenByte(t *testing.T, tok string) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(tok)
+	if err != nil {
+		t.Fatalf("decode token %q: %v", tok, err)
+	}
+	if len(raw) == 0 {
+		t.Fatal("token has no bytes")
+	}
+	raw[len(raw)-1] ^= 1
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
 // pollNow polls with a task already queued (the manual clock never reaches the long-poll
 // deadline, so the caller must make sure one is there).
 func pollNow(t *testing.T, s *Server) *api.WorkflowTask {
@@ -239,8 +252,12 @@ func TestWorkflowTaskTokenRejectsForgedTokens(t *testing.T) {
 	if err != nil || tok.WorkflowID != "wf" || tok.RunID != task.RunID || tok.Shard != s.ShardFor("wf") || tok.Seq != 1 {
 		t.Fatalf("token %+v, %v", tok, err)
 	}
-	wrongShard, _ := encodeWorkflowTaskToken(workflowTaskToken{Shard: 1 - tok.Shard, WorkflowID: "wf", RunID: tok.RunID, Seq: 1})
-	for _, bad := range []string{"", "garbage!", base64.RawURLEncoding.EncodeToString([]byte("not json")), wrongShard} {
+	wrongShard, _ := encodeWorkflowTaskToken(s.cfg.TokenKey, workflowTaskToken{Shard: 1 - tok.Shard, WorkflowID: "wf", RunID: tok.RunID, Seq: 1})
+	wrongKey := append([]byte(nil), s.cfg.TokenKey...)
+	wrongKey[0] ^= 1
+	wrongKeySigned, _ := encodeWorkflowTaskToken(wrongKey, workflowTaskToken{Shard: tok.Shard, WorkflowID: tok.WorkflowID, RunID: tok.RunID, Seq: tok.Seq})
+	flipped := flipTokenByte(t, task.TaskToken)
+	for _, bad := range []string{"", "garbage!", base64.RawURLEncoding.EncodeToString([]byte("not json")), wrongShard, wrongKeySigned, flipped} {
 		if err := s.CompleteWorkflowTask(ctx, api.CompleteWorkflowTaskRequest{TaskToken: bad}); !errors.Is(err, api.ErrInvalidArgument) {
 			t.Fatalf("complete with %q: %v", bad, err)
 		}
@@ -248,7 +265,7 @@ func TestWorkflowTaskTokenRejectsForgedTokens(t *testing.T) {
 			t.Fatalf("fail with %q: %v", bad, err)
 		}
 	}
-	unknown, _ := encodeWorkflowTaskToken(workflowTaskToken{Shard: tok.Shard, WorkflowID: "wf", RunID: "nope", Seq: 1})
+	unknown, _ := encodeWorkflowTaskToken(s.cfg.TokenKey, workflowTaskToken{Shard: tok.Shard, WorkflowID: "wf", RunID: "nope", Seq: 1})
 	if err := s.CompleteWorkflowTask(ctx, api.CompleteWorkflowTaskRequest{TaskToken: unknown}); !errors.Is(err, api.ErrNotFound) {
 		t.Fatalf("unknown run: %v", err)
 	}

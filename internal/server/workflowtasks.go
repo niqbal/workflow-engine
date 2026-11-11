@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +14,8 @@ import (
 
 // WI-018: workflow tasks (poll, complete, fail) (SPEC §4.2, §8.2, D5).
 
-// workflowTaskToken is what a workflow task token carries. On the wire it is opaque: base64
-// of its JSON.
+// workflowTaskToken is what a workflow task token carries. On the wire it is an opaque,
+// signed token.
 type workflowTaskToken struct {
 	Shard      int    `json:"shard"`
 	WorkflowID string `json:"workflowID"`
@@ -28,23 +27,19 @@ func (t workflowTaskToken) key() store.RunKey {
 	return store.RunKey{Shard: t.Shard, WorkflowID: t.WorkflowID, RunID: t.RunID}
 }
 
-func encodeWorkflowTaskToken(t workflowTaskToken) (string, error) {
-	b, err := json.Marshal(t)
-	if err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+func encodeWorkflowTaskToken(key []byte, t workflowTaskToken) (string, error) {
+	return encodeTaskToken(key, t)
+}
+
+func decodeWorkflowTaskToken(key []byte, tok string) (workflowTaskToken, error) {
+	return decodeTaskToken[workflowTaskToken](key, tok)
 }
 
 // decodeWorkflowTaskToken parses a token, rejecting anything this node could not have issued.
 func (s *Server) decodeWorkflowTaskToken(tok string) (workflowTaskToken, error) {
-	var t workflowTaskToken
-	b, err := base64.RawURLEncoding.DecodeString(tok)
+	t, err := decodeWorkflowTaskToken(s.cfg.TokenKey, tok)
 	if err != nil {
-		return t, invalid("malformed task token")
-	}
-	if err := json.Unmarshal(b, &t); err != nil {
-		return t, invalid("malformed task token")
+		return t, err
 	}
 	if t.WorkflowID == "" || t.RunID == "" || t.Seq <= 0 || t.Shard != s.ShardFor(t.WorkflowID) {
 		return t, invalid("malformed task token")
@@ -97,7 +92,7 @@ func (s *Server) startWorkflowTask(ctx context.Context, t store.Task, identity s
 		return nil, err
 	}
 	wt := w.State.WorkflowTask
-	token, err := encodeWorkflowTaskToken(workflowTaskToken{Shard: t.Run.Shard, WorkflowID: t.Run.WorkflowID,
+	token, err := encodeWorkflowTaskToken(s.cfg.TokenKey, workflowTaskToken{Shard: t.Run.Shard, WorkflowID: t.Run.WorkflowID,
 		RunID: t.Run.RunID, Seq: wt.Seq})
 	if err != nil {
 		return nil, err
