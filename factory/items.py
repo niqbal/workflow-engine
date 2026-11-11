@@ -137,12 +137,19 @@ ITEMS = [
   ["Runs end to end with the scripted model; README shows the output"]),
 ]
 
+import json as _json
+_ISSUES = ROOT / "factory" / "issues.json"
+ISSUES = _json.loads(_ISSUES.read_text()) if _ISSUES.exists() else {}
+
+
 def front(it):
     i, m, owner, tier, title, deps, body, acc = it
     lines = ["---", f"title: \"{i} {title}\"", "kind: task", f"labels: [\"{m}\"]", "acceptance:"]
     lines += [f"  - \"{a.replace(chr(34), chr(39))}\"" for a in acc]
     lines += ["---", body, "", f"Depends on: {', '.join(deps) or 'none'}.",
               "Spec: docs/SPEC.md. Do not edit existing tests; contract tests are owned by the human."]
+    if i in ISSUES:
+        lines.append(f"GitHub issue: niqbal/workflow-engine#{ISSUES[i]}")
     return "\n".join(lines) + "\n"
 
 def main():
@@ -168,7 +175,8 @@ def main():
         doc += [f"| {i} | {o} | {t} | {ti} | {', '.join(d) or '—'} |" for i,_,o,t,ti,d,_,_ in its]
         doc.append("")
         for i,_,o,t,ti,d,body,acc in its:
-            doc += [f"### {i} {ti}", "", body, "", "Acceptance:"] + [f"- {a}" for a in acc] + [""]
+            ref = f" (#{ISSUES[i]})" if i in ISSUES else ""
+            doc += [f"### {i} {ti}{ref}", "", body, "", "Acceptance:"] + [f"- {a}" for a in acc] + [""]
         for it in its:
             if it[2] == "factory":
                 (inbox / f"{it[0]}.md").write_text(front(it))

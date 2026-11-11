@@ -19,7 +19,7 @@ Tier is the expected tier from the path rules in SPEC §15.2, not a label.
 | WI-005 | human | 3 | Scenario test suite for the server (contracttest) | WI-002 |
 | WI-006 | human | 3 | Replay test helper | WI-002 |
 
-### WI-001 Repository skeleton and CI
+### WI-001 Repository skeleton and CI (#1)
 
 go.mod (Go >= 1.22), package layout from SPEC §6, §6.1 and §12, Makefile targets build/vet/test/sim, local CI script.
 
@@ -27,7 +27,7 @@ Acceptance:
 - `go build ./...`, `go vet ./...`, `go test ./... -race` pass on an empty skeleton
 - Every package path matches a tier rule in SPEC §15.2
 
-### WI-002 Core interfaces, xsync and event types
+### WI-002 Core interfaces, xsync and event types (#2)
 
 Clock, Rand, Transport, Spawner and internal/xsync (SPEC §6.1); Store, dbVersion and errors (§8.1, §12); every event type from §4.1; RunKey, Fence, Task (with its armed-by reference and attempt), MutableState including buffered events and dedup sets.
 
@@ -35,7 +35,7 @@ Acceptance:
 - All types compile and are documented
 - Event JSON round-trip test covers every event type
 
-### WI-003 Determinism lint
+### WI-003 Determinism lint (#3)
 
 The lint test exactly as scoped in SPEC §6.1, including context.WithTimeout, time.Since, select, channel types and map range.
 
@@ -43,7 +43,7 @@ Acceptance:
 - Fails on one planted violation of each banned form and passes on the skeleton
 - internal/engine and internal/httpapi are outside the scope
 
-### WI-004 Store contract suite (storetest)
+### WI-004 Store contract suite (storetest) (#4)
 
 storetest.Run(t, factory): create, dbVersion compare-and-swap including state-only writes, event ID continuity, ErrConflict, ErrFenced after another node acquires, outbox read from ack level with out-of-order commits, timer task ordering, concurrent writers.
 
@@ -51,7 +51,7 @@ Acceptance:
 - Fails against a stub store
 - Includes a case where task 10 commits before task 9 and both are read
 
-### WI-005 Scenario test suite for the server (contracttest)
+### WI-005 Scenario test suite for the server (contracttest) (#5)
 
 contracttest: scenario tests against an in-process single-node server, written before the server exists. Covers start dedup against closed runs, signal dedup before closed check, buffered events and rejected close, stale attempts, timeout tasks bound to attempts, workflow-task and activity redispatch, execution timeout, retry backoff math.
 
@@ -59,7 +59,7 @@ Acceptance:
 - Every SPEC §8 rule has at least one named scenario
 - Suite compiles against the server interfaces and fails against stubs
 
-### WI-006 Replay test helper
+### WI-006 Replay test helper (#6)
 
 wftest.ReplayFromFile(path, fn). Golden histories are generated from real M1 runs (WI-024), not written by hand, so they cannot encode a misunderstanding of buffering.
 
@@ -87,7 +87,7 @@ Acceptance:
 | WI-024 | factory | 2 | Worker and end-to-end example | WI-014, WI-023, WI-022, WI-020 |
 | WI-025 | factory | 1 | Minimal CLI | WI-023 |
 
-### WI-010 Deterministic runtime and run-twice trace check
+### WI-010 Deterministic runtime and run-twice trace check (#7)
 
 Gated Spawner, simulated Clock and Rand, xsync over the gate (SPEC §6.1, D9). A harness that runs a scenario twice with one seed and diffs the traces. Becomes a gate for every factory job.
 
@@ -95,7 +95,7 @@ Acceptance:
 - Identical traces across 50 runs of a concurrent scenario
 - A planted map-iteration dependency is caught by the trace diff
 
-### WI-011 In-memory store passing storetest
+### WI-011 In-memory store passing storetest (#8)
 
 internal/store/memstore satisfying Store. Every call is a yield point under the deterministic runtime. Fault hooks: error before commit, ambiguous commit (commit then error), variable commit latency.
 
@@ -105,7 +105,7 @@ Acceptance:
 - Run-twice trace check passes
 - No changes to internal/store/storetest
 
-### WI-012 Coroutine dispatcher
+### WI-012 Coroutine dispatcher (#9)
 
 internal/engine dispatcher per SPEC §7.1: one coroutine at a time, deterministic order, yields only at SDK blocking calls; Future, Channel, Selector.
 
@@ -113,7 +113,7 @@ Acceptance:
 - Property test: 1,000 random programs produce identical traces across 50 runs each
 - No goroutine leaks (goleak)
 
-### WI-013 Replayer and non-determinism detection
+### WI-013 Replayer and non-determinism detection (#10)
 
 Batching per WorkflowTaskStarted (SPEC §7.2), command-to-event matching, NonDeterministicError (§7.3).
 
@@ -121,7 +121,7 @@ Acceptance:
 - Hand-built histories with buffered events replay exactly
 - A changed activity type yields NonDeterministicError naming the event ID
 
-### WI-014 Workflow SDK (package wf)
+### WI-014 Workflow SDK (package wf) (#11)
 
 ExecuteActivity, NewTimer, Sleep, GetSignalChannel, NewSelector, Go, Now, SideEffect, GetInfo (SPEC §3.1). Human-owned: G3 rests on it.
 
@@ -129,14 +129,14 @@ Acceptance:
 - Each API driven through the replayer with hand-built histories
 - SideEffect runs once and returns the recorded value on replay
 
-### WI-015 Mutable state and transitions (internal/history)
+### WI-015 Mutable state and transitions (internal/history) (#12)
 
 Pure functions applying events and state-only changes to MutableState: buffering, rejected close, retry attempts, dedup sets, timer and timeout references (SPEC §4.2, §8). Human-owned: G4, G5 and G7 rest on it.
 
 Acceptance:
 - Table tests for every legal transition and one illegal transition per event type
 
-### WI-016 Matching: in-memory task queues with long-poll
+### WI-016 Matching: in-memory task queues with long-poll (#13)
 
 internal/server/matching: per task-queue FIFO of workflow and activity tasks; long-poll bounded by the Clock; xsync only.
 
@@ -145,7 +145,7 @@ Acceptance:
 - Tests use the simulated clock, no real sleeps
 - Lint and run-twice trace check pass
 
-### WI-017 History service: start, signal, terminate
+### WI-017 History service: start, signal, terminate (#14)
 
 Start with requestID dedup against the latest run open or closed; signal with dedup before the closed check; terminate. One store write each (SPEC §8.1, §8.4).
 
@@ -154,7 +154,7 @@ Acceptance:
 - Every state change is one UpdateRun (counting store wrapper)
 - No changes to contracttest
 
-### WI-018 History service: workflow task path
+### WI-018 History service: workflow task path (#15)
 
 Record started, complete with commands, fail, buffered events while started, rejected close when buffered events exist (SPEC §4.2, §8.2).
 
@@ -162,7 +162,7 @@ Acceptance:
 - contracttest workflow-task scenarios pass, including buffered events and rejected close
 - No changes to contracttest
 
-### WI-019 History service: activity path
+### WI-019 History service: activity path (#16)
 
 Record started, complete, fail; stale attempt rejected; retry state and backoff timer task written (SPEC §8.3).
 
@@ -170,7 +170,7 @@ Acceptance:
 - contracttest activity scenarios pass
 - No changes to contracttest
 
-### WI-020 Transfer processor with ack level and redispatch
+### WI-020 Transfer processor with ack level and redispatch (#17)
 
 Read from the lowest undeleted task, push to matching, delete on start, redispatch unstarted workflow and activity tasks every redispatchInterval (SPEC §8.1-8.3).
 
@@ -178,7 +178,7 @@ Acceptance:
 - contracttest redispatch scenarios pass
 - With variable commit latency in memstore, no task is ever skipped (new test)
 
-### WI-021 Timer processor core
+### WI-021 Timer processor core (#18)
 
 Per-shard min-heap with loadAheadWindow; conditional fire bound to the armed reference and attempt; delete after fire (SPEC §10).
 
@@ -187,14 +187,14 @@ Acceptance:
 - Crash between fire and delete produces no second TimerFired
 - contracttest timer scenarios pass
 
-### WI-022 Timeouts and retry backoff
+### WI-022 Timeouts and retry backoff (#19)
 
 Activity start-to-close and schedule-to-close, workflow-task timeout, workflow execution timeout, retry backoff per RetryPolicy.
 
 Acceptance:
 - contracttest timeout scenarios pass, including an old attempt's timeout being a no-op
 
-### WI-023 HTTP API and Go client
+### WI-023 HTTP API and Go client (#20)
 
 internal/httpapi endpoints from SPEC §13.1 (no heartbeat) with JSON error codes; client package with a Run handle.
 
@@ -202,7 +202,7 @@ Acceptance:
 - httptest coverage for every endpoint and error code
 - Client retries only idempotent calls or calls with a requestID
 
-### WI-024 Worker and end-to-end example
+### WI-024 Worker and end-to-end example (#21)
 
 worker: register, poll, replay, run activities with deadlines, report. Run the SPEC §3.4 example for approved, rejected and timed-out paths and save the three histories as golden files for wftest.
 
@@ -210,7 +210,7 @@ Acceptance:
 - Example passes end to end against an in-process server
 - Golden histories generated and replayed by wftest
 
-### WI-025 Minimal CLI
+### WI-025 Minimal CLI (#22)
 
 cmd/wfe: server (memstore), workflow start, signal, history.
 
@@ -226,7 +226,7 @@ Acceptance:
 | WI-031 | human | 3 | Postgres fencing and dbVersion stress test | WI-030 |
 | WI-032 | factory | 2 | Crash recovery on restart | WI-030, WI-020, WI-021 |
 
-### WI-030 Postgres store
+### WI-030 Postgres store (#23)
 
 internal/store/pgstore with pgx and versioned SQL migrations (SPEC §12). Tests use PG_URL or docker; skipped when unavailable.
 
@@ -234,14 +234,14 @@ Acceptance:
 - `storetest.Run` passes for pgstore
 - Migrations apply to an empty database and are idempotent
 
-### WI-031 Postgres fencing and dbVersion stress test
+### WI-031 Postgres fencing and dbVersion stress test (#24)
 
 Review pgstore's fence and dbVersion checks under concurrent transactions; two-writer stress test.
 
 Acceptance:
 - Zero accepted stale-fence or stale-version writes over 10,000 attempts
 
-### WI-032 Crash recovery on restart
+### WI-032 Crash recovery on restart (#25)
 
 On shard load, read transfer and timer tasks from the store and resume. Integration test plus scripts/kill-restart.sh.
 
@@ -258,7 +258,7 @@ Acceptance:
 | WI-043 | factory | 1 | Simulation workloads | WI-041 |
 | WI-044 | factory | 1 | Seed sweep command and failure reports | WI-041, WI-042 |
 
-### WI-040 Cluster simulation harness
+### WI-040 Cluster simulation harness (#26)
 
 sim.Run(seed, workload, faults): N nodes, memstore, simulated workers, quiet phase (SPEC §11.1).
 
@@ -266,14 +266,14 @@ Acceptance:
 - Same seed yields byte-identical traces across 20 runs
 - A 30-day virtual timer workload runs in under 5 s wall time
 
-### WI-041 Oracle I1-I8 with ghost log
+### WI-041 Oracle I1-I8 with ghost log (#27)
 
 Checks from SPEC §11.3; I6 reads a ghost log outside the store; I8 derives the reference from final history.
 
 Acceptance:
 - Each check catches a deliberately broken engine variant
 
-### WI-042 Fault injectors
+### WI-042 Fault injectors (#28)
 
 Crash and restart, drop and delay, partitions, process pause, clock skew within epsilon, store transient errors, ambiguous commits, commit latency, worker crash after side effect. Human-owned: a weak injector silently shrinks what the simulator can find.
 
@@ -281,14 +281,14 @@ Acceptance:
 - Each fault has a test proving it fires and reproduces by seed
 - Faults stop at the quiet phase
 
-### WI-043 Simulation workloads
+### WI-043 Simulation workloads (#29)
 
 The workload mix from SPEC §11.4.
 
 Acceptance:
 - Each workload passes the oracle with faults disabled
 
-### WI-044 Seed sweep command and failure reports
+### WI-044 Seed sweep command and failure reports (#30)
 
 `wfe sim --seeds A-B --parallel N`, sim/failures/<seed>.txt, CI seeds 1-200, docs/SIM-BUGS.md template.
 
@@ -303,21 +303,21 @@ Acceptance:
 | WI-051 | factory | 2 | Request routing to shard owner | WI-050 |
 | WI-052 | factory | 2 | Task-queue routing | WI-050 |
 
-### WI-050 Shard leases and fencing
+### WI-050 Shard leases and fencing (#31)
 
 internal/shard: acquire, renew, stop-serving margin, failover placement (SPEC §9).
 
 Acceptance:
 - Simulated pause longer than the lease: all of the paused node's writes rejected (I6)
 
-### WI-051 Request routing to shard owner
+### WI-051 Request routing to shard owner (#32)
 
 Frontend ownership cache, forward over Transport, refresh on not_owner, bounded retries.
 
 Acceptance:
 - Simulation: requests to any node succeed while shards fail over
 
-### WI-052 Task-queue routing
+### WI-052 Task-queue routing (#33)
 
 Queue q lives on the owner of shard hash(q); history pushes and frontend polls go there (SPEC §9, D10).
 
@@ -331,7 +331,7 @@ Acceptance:
 | WI-060 | human | 3 | GetVersion | WI-014, WI-040 |
 | WI-061 | factory | 1 | Prometheus metrics | WI-023 |
 
-### WI-060 GetVersion
+### WI-060 GetVersion (#34)
 
 wf.GetVersion with MarkerRecorded and DefaultVersion (SPEC §7.4). Human-owned: G3 rests on it.
 
@@ -339,7 +339,7 @@ Acceptance:
 - Golden histories replay with new code on the old branch
 - Simulation swaps code mid-run without violations
 
-### WI-061 Prometheus metrics
+### WI-061 Prometheus metrics (#35)
 
 Metrics from SPEC §13.3 (no tracing); slog fields on every log line.
 
@@ -353,14 +353,14 @@ Acceptance:
 | WI-070 | factory | 1 | Agent example with scripted model | WI-024, WI-060 |
 | WI-071 | factory | 1 | Demo script | WI-070, WI-032 |
 
-### WI-070 Agent example with scripted model
+### WI-070 Agent example with scripted model (#36)
 
 examples/agent per SPEC §14 with idempotent ledger and mail sinks.
 
 Acceptance:
 - Test kills the worker after IssueRefund's side effect and before it reports: ledger shows exactly one refund
 
-### WI-071 Demo script
+### WI-071 Demo script (#37)
 
 examples/agent/demo.sh: start, kill mid-refund, restart, approve with curl, print history and ledger.
 
