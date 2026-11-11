@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Owner's helper for reviewing and steering software-factory jobs on this repo.
+
+Wraps the multi-step parts of docs/REVIEWING.md. asf itself does the agent work; this script
+only reads its state, runs checks, and does the git and GitHub bookkeeping.
+
+    scripts/factory pending            jobs waiting on you, with the reason
+    scripts/factory show JOB           everything about one job: reason, findings, manual checks
+    scripts/factory check JOB          run CI and the contract board on the job's branch (isolated)
+    scripts/factory merge JOB          merge a reviewed job, close its issue, mark it done, push
+    scripts/factory next               backlog items whose dependencies are all merged
+    scripts/factory queue WI-xxx ...   move items to factory/ready and start jobs for them
+    scripts/factory run JOB|all        run jobs (in the foreground)
+    scripts/factory resume JOB         continue a paused job (adds time for hours spent paused)
+    scripts/factory retry JOB          re-enter a stopped job where it stopped (e.g. after a policy fix)
+    scripts/factory adopt JOB          put finished work from a stopped job's sandbox on a branch
+    scripts/factory rerun JOB          cancel and start the item again from current main
+    scripts/factory cancel JOB REASON  give up on a job (asf has no cancel command)
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+ASF_DIR = Path.home() / "work" / "software-factory"
+ASF = [str(ASF_DIR / ".venv" / "bin" / "asf"), "--repo", str(REPO)]
+GH_REPO = "niqbal/workflow-engine"
+ISSUES = json.loads((REPO / "factory" / "issues.json").read_text())
+
+
+def state_dir() -> Path:
+    found = sorted((Path.home() / ".asf").glob("workflow-engine-*"))
+    if not found:
+        sys.exit("no asf state for workflow-engine under ~/.asf")
+    return found[0]
+
+
+def store():
+    sys.path.insert(0, str(ASF_DIR))
+    from asf.store import Store  # noqa: E402
+    return Store(state_dir() / "factory.db")
+
+
+def sh(*cmd, cwd=REPO, check=True, capture=False):
+    r = subprocess.run(list(cmd), cwd=cwd, text=True, capture_output=capture)
+    if check and r.returncode:
+        sys.exit(f"failed: {' '.join(cmd)}\n{(r.stderr or '')[-2000:]}")
+    return r.stdout if capture else r.returncode
+
+
+def item_of(job) -> str:
+    """The WI-xxx number of a job (asf keys work items by its own ID; ours is external_id)."""
+    row = store().db.execute("SELECT external_id FROM work_items WHERE id = ?", (job["work_item_id"],)).fetchone()
+    return row[0] if row else "?"
+
+
+def jobs():
+    st = store()
+    rows = st.db.execute("SELECT id FROM jobs ORDER BY created").fetchall()
+    return [st.job(r[0]) for r in rows]
+
+
+def branch_of(job_id: str) -> str | None:
+    out = sh("git", "branch", "--list", "--format=%(refname:short)", f"factory/*{job_id[4:].lower()}", capture=True)
+    names = [b for b in out.split() if b]
+    return names[0] if names else None
+
+
+def cmd_pending(_):
+    def unmerged(j):
+        b = branch_of(j["id"])
+        return bool(b) and subprocess.run(["git", "merge-base", "--is-ancestor", b, "main"], cwd=REPO).returncode != 0
+    waiting = [j for j in jobs() if j["state"] in ("needs_human", "paused", "failed", "awaiting_approval")
+               or (j["state"] == "done" and unmerged(j))]
+    if not waiting:
+        print("Nothing is waiting on you.")
+        return
+    for j in waiting:
+        d = j["data"]
+        reason = d.get("needs_human_reason") or d.get("pause_reason") or d.get("error") or ""
+        if j["state"] == "done":
+            reason = f"delivered on {branch_of(j['id'])}: review and merge"
+        print(f"{j['id']}  {j['state']:<12} {item_of(j):<7} {reason[:150]}")
+    print("\nNext: scripts/factory show <JOB>")
+
+
+def cmd_show(args):
+    j = store().job(args[0])
+    d = j["data"]
+    print(f"{j['id']}  {j['state']}  tier {j.get('tier')}  item {item_of(j)}  (GitHub #{ISSUES.get(item_of(j), '?')})")
+    for key, label in (("needs_human_reason", "Why it stopped"), ("pause_reason", "Why it paused"),
+                       ("error", "Error"), ("feedback", "Reviewer findings")):
+        if d.get(key):
+            print(f"\n{label}:\n{d[key]}")
+    if d.get("manual_verification"):
+        print("\nManual checks the factory asks you to do:")
+        for m in d["manual_verification"]:
+            print(f"  - {m}")
+    b = branch_of(j["id"])
+    print(f"\nBranch: {b or '(none: not delivered)'}")
+    sandbox = state_dir() / "sandboxes" / j["id"]
+    if sandbox.exists():
+        print(f"Sandbox (work in progress): {sandbox}")
+    report = state_dir() / "reports" / f"{j['id']}.md"
+    if report.exists():
+        print(f"Report: {report}")
+    print(f"Audit trail: {' '.join(ASF)} events {j['id']}")
+
+
+def cmd_check(args):
+    b = branch_of(args[0])
+    if not b:
+        sys.exit("no delivered branch for that job (see `show`)")
+    print(f"Files changed on {b}:")
+    sh("git", "diff", "--stat", f"main...{b}")
+    hand = [f for f in sh("git", "diff", "--name-only", f"main...{b}", capture=True).split()
+            if f in ("internal/server/server.go", "internal/server/runs.go", "internal/server/contract_test.go",
+                     "go.mod", "factory.yaml", "Makefile")
+            or f.startswith(("internal/history/", "contracttest/", "internal/store/storetest/", "internal/engine/"))]
+    if hand:
+        print("\n!! Touches hand-owned files (you must approve these lines):")
+        for f in hand:
+            print(f"   {f}   ->  git diff main...{b} -- {f}")
+    with tempfile.TemporaryDirectory() as tmp:
+        wt = Path(tmp) / "check"
+        sh("git", "worktree", "add", "-q", str(wt), b)
+        try:
+            print("\nRunning make ci on the branch ...")
+            rc = subprocess.run(["make", "ci"], cwd=wt, capture_output=True).returncode
+            print("  CI:", "green" if rc == 0 else "RED (check out the branch and run `make ci` to see why)")
+            out = subprocess.run(["make", "contract"], cwd=wt, capture_output=True, text=True).stdout
+            print("  " + (out.strip().splitlines()[-1] if out.strip() else "contract: n/a"))
+        finally:
+            sh("git", "worktree", "remove", "--force", str(wt))
+    print(f"\nIf it looks right: scripts/factory merge {args[0]}")
+
+
+def cmd_merge(args):
+    job_id = args[0]
+    j = store().job(job_id)
+    item = item_of(j)
+    b = branch_of(job_id)
+    if not b:
+        sys.exit("no delivered branch; for work stuck in a sandbox see docs/REVIEWING.md (case 6)")
+    if sh("git", "status", "--porcelain", capture=True).strip():
+        sys.exit("your checkout has uncommitted changes; commit or stash them first")
+    sh("git", "checkout", "-q", "main")
+    num = ISSUES.get(item)
+    msg = (f"Merge {item} (factory job {job_id})\n\nReviewed by the owner with scripts/factory check.\n\n"
+           + (f"Closes #{num}\n" if num else ""))
+    sh("git", "merge", "--no-ff", "-q", b, "-m", msg)
+    if subprocess.run(["make", "ci"], cwd=REPO, capture_output=True).returncode:
+        sh("git", "reset", "-q", "--hard", "HEAD~1")
+        sys.exit("CI failed after merging; merge undone. Run `make ci` on the branch to see why.")
+    ready = REPO / "factory" / "ready" / f"{item}.md"
+    if ready.exists():
+        sh("git", "mv", str(ready), str(REPO / "factory" / "done" / f"{item}.md"))
+        sh("git", "commit", "-q", "-m", f"Mark {item} done")
+    sh("git", "push", "-q")
+    store().update_job(job_id, "done", outcome=f"merged by owner into main")
+    print(f"Merged {item}; GitHub #{num} closes on push. Next: scripts/factory next")
+
+
+def deps_of():
+    sys.path.insert(0, str(REPO / "factory"))
+    import items  # noqa: E402
+    return {i[0]: (i[2], i[4], i[5]) for i in items.ITEMS}
+
+
+def cmd_next(_):
+    done = {p.stem for p in (REPO / "factory" / "done").glob("*.md")}
+    closed = {str(x["number"]) for x in json.loads(sh("gh", "issue", "list", "-R", GH_REPO, "--state", "closed",
+                                                     "-L", "300", "--json", "number", capture=True))}
+    finished = done | {i for i, n in ISSUES.items() if str(n) in closed}
+    ready = {p.stem for p in (REPO / "factory" / "ready").glob("*.md")}
+    print("Unblocked (all dependencies merged):")
+    for wid, (owner, title, deps) in deps_of().items():
+        if wid in finished or wid in ready:
+            continue
+        if all(d in finished for d in deps):
+            how = f"scripts/factory queue {wid}" if owner == "factory" else "hand-owned: build it yourself (or ask Claude)"
+            print(f"  {wid} {title}  [{owner}]  -> {how}")
+    if ready:
+        print("Already queued: " + ", ".join(sorted(ready)))
+
+
+def cmd_queue(args):
+    for wid in args:
+        src = REPO / "factory" / "backlog" / f"{wid}.md"
+        if not src.exists():
+            sys.exit(f"{wid} is not in factory/backlog (hand-owned, already queued, or done)")
+        sh("git", "mv", str(src), str(REPO / "factory" / "ready" / f"{wid}.md"))
+    sh("git", "commit", "-q", "-m", "Queue " + ", ".join(args))
+    sh("git", "push", "-q")
+    subprocess.run(ASF + ["intake"])
+    print("Now: scripts/factory run all   (or run JOB)")
+
+
+def cmd_run(args):
+    if args and args[0] != "all":
+        os.execv(ASF[0], ASF + ["run", "--job", args[0]])
+    os.execv(ASF[0], ASF + ["run", "--all"])
+
+
+def cmd_resume(args):
+    subprocess.run(ASF + ["resume", args[0], "--extra-minutes", "600"], check=True)
+    print(f"Resumed. Now: scripts/factory run {args[0]}")
+
+
+def cmd_retry(args):
+    """Re-enter a needs_human/failed job where it stopped (gates: rerun on the same work)."""
+    subprocess.run(ASF + ["retry", args[0]], check=True)
+    subprocess.run(ASF + ["resume", args[0], "--extra-minutes", "600"], capture_output=True)
+    print(f"Now: scripts/factory run {args[0]}")
+
+
+def cmd_adopt(args):
+    """Move finished work out of a stopped job's sandbox onto a branch you can check and merge."""
+    job_id = args[0]
+    j = store().job(job_id)
+    sandbox = state_dir() / "sandboxes" / job_id
+    if not sandbox.exists():
+        sys.exit("no sandbox for that job")
+    if not sh("git", "status", "--porcelain", cwd=sandbox, capture=True).strip():
+        sys.exit("the sandbox has no uncommitted work to adopt")
+    branch = f"factory/{item_of(j).lower()}-adopted-{job_id[4:].lower()}"
+    sh("git", "checkout", "-q", "-b", branch, cwd=sandbox)
+    sh("git", "add", "-A", cwd=sandbox)
+    sh("git", "-c", "user.name=asf factory", "-c", "user.email=factory@localhost", "commit", "-q", "-m",
+       f"{item_of(j)}: work adopted from stopped factory job {job_id}", cwd=sandbox)
+    print(f"Adopted onto {branch}. The factory's later stages did not run on it, so review it fully:\n"
+          f"  scripts/factory check {job_id}\n  git diff main...{branch}\nthen scripts/factory merge {job_id}")
+
+
+def cmd_rerun(args):
+    """Cancel a job and start its item again from current main (after you fixed the item or main)."""
+    j = store().job(args[0])
+    item = item_of(j)
+    cmd_cancel([args[0], "rerun from current main"])
+    subprocess.run(ASF + ["intake", "--id", item, "--rerun"])
+    print("Now: scripts/factory run all")
+
+
+def cmd_cancel(args):
+    if len(args) < 2:
+        sys.exit("usage: scripts/factory cancel JOB REASON")
+    store().update_job(args[0], "rejected", needs_human_reason="cancelled by owner: " + " ".join(args[1:]))
+    print(f"{args[0]} cancelled. To start the item over: {' '.join(ASF)} intake --id <WI-xxx> --rerun")
+
+
+COMMANDS = {"pending": cmd_pending, "show": cmd_show, "check": cmd_check, "merge": cmd_merge,
+            "next": cmd_next, "queue": cmd_queue, "run": cmd_run, "resume": cmd_resume, "cancel": cmd_cancel,
+            "retry": cmd_retry, "adopt": cmd_adopt, "rerun": cmd_rerun}
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        sys.exit(__doc__)
+    COMMANDS[sys.argv[1]](sys.argv[2:])

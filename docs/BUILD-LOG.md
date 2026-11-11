@@ -329,3 +329,19 @@ Transport calls can be yield points. CI caught that the production runtime was m
 - Review note turned into work: task tokens are unsigned, so a caller who knows a run ID
   could complete someone else's task. New item **WI-062** (HMAC-signed tokens), M5.
 - Queued WI-022 (background loops) and WI-023 (HTTP API and Go client).
+
+## 2026-11-11 — Step 22: An owner's runbook, so reviews don't need Claude
+
+- `docs/REVIEWING.md`: the review loop and nine cases keyed to what `pending` prints
+  (delivered, diff-size gate, clarification, implementer blocked, reviewer block, stuck work,
+  paused, usage limit, give up), plus a diff checklist.
+- `scripts/factory`: `pending`, `show`, `check` (CI and contract board on the branch in a
+  throwaway worktree, flags hand-owned files), `merge` (issue number from issues.json, CI again,
+  undo on red, mark done, push), `next`, `queue`, `run`, `resume`, `retry`, `adopt` (sandbox
+  work to a branch), `rerun`, `cancel`.
+- Found while building it: WI-023 stopped on the diff-size gate at 1,200 lines even though the
+  limit had been raised. The budgets rewrite in Step 19 had silently deleted the `limits`
+  block. Restored (tier 2 now 3,000), with a comment saying to keep it separate.
+- WI-022 (background loops) was delivered: `check` shows CI green and 26/26. WI-023 (HTTP API)
+  is waiting on the restored limit. Both are left for the owner as the first two runs of the
+  runbook.
