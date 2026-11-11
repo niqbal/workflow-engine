@@ -57,6 +57,8 @@ type Server struct {
 	rand   rnd.Rand
 	fences map[int]store.Fence
 	starts map[int]xsync.Locker // per-shard start serialization, created on demand (workflows.go)
+
+	transfer map[int]*transferShard // per-shard transfer processor state, created on demand (transfer.go)
 }
 
 // New builds a node. r provides run IDs; give each node its own seed.
