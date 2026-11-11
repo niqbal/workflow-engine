@@ -137,6 +137,10 @@ ITEMS = [
   "Metrics from SPEC §13.3 (no tracing); slog fields on every log line.",
   ["/metrics exposes every listed metric; a test scrapes and checks names"]),
 
+ ("WI-062","M5","factory",2,"Signed task tokens",["WI-019"],
+  "Task tokens (workflow and activity) are unsigned base64 JSON today, so anyone who can reach the API and knows a runID can complete or fail a started task (found in the WI-019 review). Sign tokens with HMAC-SHA256 using a per-cluster key from server Config (generated if absent in tests); reject bad signatures with invalid_argument. Share one encode/decode helper between workflowtasks.go and activitytasks.go.",
+  ["A token with a flipped byte or a wrong key is rejected with invalid_argument", "All 26 TestContract_ scenarios still pass", "Workflow and activity tokens use one shared helper"]),
+
  # ---------------- M6: showcase ----------------
  ("WI-070","M6","factory",1,"Agent example with scripted model",["WI-024","WI-060"],
   "examples/agent per SPEC §14 with idempotent ledger and mail sinks.",

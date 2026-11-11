@@ -311,3 +311,21 @@ Transport calls can be yield points. CI caught that the production runtime was m
   oracle issue (WI-041) instead of WI-030 (#23). Reopened #27 and closed #23 with notes. Every
   issue number now comes from `factory/issues.json`, never from memory.
 - Queued WI-021 (timer processor, 5 scenarios).
+
+## 2026-11-11 — Step 21: WI-021 and WI-019 merged; contract board 26/26
+
+- **WI-021 (timer processor), $14.35.** It kept its state in the new `subsystems.go`
+  extension point, so no hand-owned file was touched and no sign-off was needed. Board
+  14 → 18.
+- **WI-019 (activity handlers), $16.36.** The implementer finished the handlers, then stopped
+  on `ActivityNonRetryableFailure` and reported that **the contract scenario was wrong**: it
+  expected a poll to return the second workflow's task while the first workflow's older task
+  was still queued, which FIFO matching rightly returns first. It refused to bend matching to
+  fit, as AGENTS.md says. The owner fixed the scenario.
+  - The job had stopped before its tester and reviewer stages, so its work was taken to an
+    integration branch and an independent reviewer read it cold. Verdict: merge, no must-fix
+    items; a mutation test confirmed the tests catch a missing transfer-task delete.
+  - **Contract board: 26/26.** M1's server core is complete.
+- Review note turned into work: task tokens are unsigned, so a caller who knows a run ID
+  could complete someone else's task. New item **WI-062** (HMAC-signed tokens), M5.
+- Queued WI-022 (background loops) and WI-023 (HTTP API and Go client).
