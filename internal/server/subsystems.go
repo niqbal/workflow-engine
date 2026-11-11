@@ -8,4 +8,5 @@ import "github.com/niqbal/workflow-engine/internal/xsync"
 type subsystems struct {
 	starts   map[int]xsync.Locker   // per-shard start serialization (workflows.go)
 	transfer map[int]*transferShard // per-shard transfer processor state (transfer.go)
+	timers   map[int]xsync.Locker   // per-shard timer scan serialization (timers.go)
 }

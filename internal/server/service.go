@@ -36,5 +36,8 @@ func (s *Server) FailActivityTask(ctx context.Context, r api.FailActivityTaskReq
 // there is nothing left to do (WI-020 transfer, WI-021 timers). Production runs the same
 // processing in background loops; tests and the simulator call Settle directly.
 func (s *Server) Settle(ctx context.Context) {
+	// Firing timers writes transfer tasks (dispatches); pushing transfer tasks writes nothing,
+	// so timers first, then transfer, leaves nothing to do at the current time.
+	s.settleTimers(ctx)
 	s.settleTransfer(ctx)
 }
