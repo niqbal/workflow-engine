@@ -88,7 +88,7 @@ func (s *Server) startWorkflowTask(ctx context.Context, t store.Task, identity s
 		return nil, fmt.Errorf("server: transfer task %d on shard %d is not a workflow task", t.ID, t.Shard)
 	}
 	var transient []history.Event
-	w, err := s.update(ctx, t.Run, []store.TaskKey{t.Key()}, func(m *history.Machine) error {
+	w, err := s.updateAndWake(ctx, t.Run, []store.TaskKey{t.Key()}, func(m *history.Machine) error {
 		evs, err := m.WorkflowTaskStarted(p.Dispatch, identity)
 		transient = evs
 		return err
@@ -122,7 +122,7 @@ func (s *Server) CompleteWorkflowTask(ctx context.Context, r api.CompleteWorkflo
 	if err != nil {
 		return err
 	}
-	_, err = s.update(ctx, tok.key(), nil, func(m *history.Machine) error {
+	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
 		return m.CompleteWorkflowTask(tok.Seq, r.Commands)
 	})
 	return err
@@ -134,7 +134,7 @@ func (s *Server) FailWorkflowTask(ctx context.Context, r api.FailWorkflowTaskReq
 	if err != nil {
 		return err
 	}
-	_, err = s.update(ctx, tok.key(), nil, func(m *history.Machine) error {
+	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
 		return m.FailWorkflowTask(tok.Seq, r.Cause)
 	})
 	return err

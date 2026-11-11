@@ -80,7 +80,7 @@ func (s *Server) fireTimer(ctx context.Context, t store.Task) error {
 	if err := json.Unmarshal(t.Payload, &p); err != nil {
 		return fmt.Errorf("server: decode timer task %d on shard %d: %w", t.ID, t.Shard, err)
 	}
-	_, err := s.update(ctx, t.Run, []store.TaskKey{t.Key()}, func(m *history.Machine) error {
+	_, err := s.updateAndWake(ctx, t.Run, []store.TaskKey{t.Key()}, func(m *history.Machine) error {
 		m.FireTimer(p.Ref)
 		return nil
 	})

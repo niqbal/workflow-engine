@@ -94,7 +94,7 @@ func (s *Server) startActivityTask(ctx context.Context, t store.Task, identity s
 		info     history.ActivityInfo
 		deadline time.Time
 	)
-	_, err := s.update(ctx, t.Run, []store.TaskKey{t.Key()}, func(m *history.Machine) error {
+	_, err := s.updateAndWake(ctx, t.Run, []store.TaskKey{t.Key()}, func(m *history.Machine) error {
 		a, d, err := m.ActivityStarted(p.Dispatch, identity)
 		if err != nil {
 			return err
@@ -130,7 +130,7 @@ func (s *Server) CompleteActivityTask(ctx context.Context, r api.CompleteActivit
 	if err != nil {
 		return err
 	}
-	_, err = s.update(ctx, tok.key(), nil, func(m *history.Machine) error {
+	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
 		return m.CompleteActivity(tok.ScheduledEventID, tok.Attempt, r.Result)
 	})
 	return err
@@ -143,7 +143,7 @@ func (s *Server) FailActivityTask(ctx context.Context, r api.FailActivityTaskReq
 	if err != nil {
 		return err
 	}
-	_, err = s.update(ctx, tok.key(), nil, func(m *history.Machine) error {
+	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
 		return m.FailActivity(tok.ScheduledEventID, tok.Attempt, r.Failure)
 	})
 	return err
