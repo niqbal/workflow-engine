@@ -83,7 +83,8 @@ def cmd_pending(_):
         reason = d.get("needs_human_reason") or d.get("pause_reason") or d.get("error") or ""
         if j["state"] == "done":
             reason = f"delivered on {branch_of(j['id'])}: review and merge"
-        print(f"{j['id']}  {j['state']:<12} {item_of(j):<7} {reason[:150]}")
+        label = "delivered" if j["state"] == "done" else j["state"]  # asf says "done" when it delivers
+        print(f"{j['id']}  {label:<12} {item_of(j):<7} {reason[:150]}")
     print("\nNext: scripts/factory show <JOB>")
 
 

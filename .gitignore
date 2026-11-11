@@ -4,3 +4,4 @@
 /sim/failures/
 .env
 .factory-run-*.log
+factory/__pycache__/
