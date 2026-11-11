@@ -76,6 +76,12 @@ budgets:
   tier_3: {usd: 20.0, minutes: 180}
   monthly_cap_usd: 150.0
 
+# Diff limits count tests. Items here must ship their own tests (often more lines than the
+# code), so the default 1200 at tier 2 stopped a good 510-line store with 700 lines of tests
+# (WI-011, BUILD-LOG Step 15).
+limits:
+  max_changed_lines: {tier_0: 400, tier_1: 1000, tier_2: 2000, tier_3: 2500}
+
 context:
   instruction_files: [AGENTS.md, README.md]
 delivery:
