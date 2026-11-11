@@ -97,7 +97,7 @@ Acceptance:
 
 ### WI-011 In-memory store passing storetest (#8)
 
-internal/store/memstore satisfying Store. Every call is a yield point under the deterministic runtime. Fault hooks: error before commit, ambiguous commit (commit then error), variable commit latency.
+internal/store/memstore satisfying Store (WI-004 storetest and WI-010 simrt are merged on main). API, exactly: `func New(opts ...Option) *Store`; `func WithRuntime(rt xsync.Runtime) Option` (when set, every Store method calls rt.Yield() on entry, and commit delays wait on rt's clock; without it there are no yields and no delays); `func WithFaults(f Faults) Option`; `type Faults struct { BeforeCommit func(op string) error; AfterCommit func(op string) error; CommitDelay func(op string) time.Duration }` where op is the method name (e.g. "UpdateRun"). BeforeCommit returning an error aborts the write with nothing committed. AfterCommit returning an error is returned to the caller although the write took effect (an ambiguous commit). CommitDelay is applied after task IDs are allocated and before the write becomes visible, so a later task ID can commit first. Nil hooks do nothing. Read-only methods call no write hooks.
 
 Acceptance:
 - `storetest.Run` passes with -race

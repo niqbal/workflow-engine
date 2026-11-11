@@ -49,3 +49,25 @@ func TestSortedKeys(t *testing.T) {
 		t.Fatalf("got %v", k)
 	}
 }
+
+func TestReceiveCtxReturnsOnCancel(t *testing.T) {
+	rt := NewReal(context.Background())
+	q := NewChan[int](rt)
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan bool, 1)
+	go func() { _, ok := q.ReceiveCtx(ctx, time.Time{}); got <- ok }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case ok := <-got:
+		if ok {
+			t.Fatal("receive succeeded with no item")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReceiveCtx did not return after cancel")
+	}
+	q.Send(5) // the item is not lost to the canceled receiver
+	if v, ok := q.TryReceive(); !ok || v != 5 {
+		t.Fatalf("item lost: %v %v", v, ok)
+	}
+}

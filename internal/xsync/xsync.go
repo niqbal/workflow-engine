@@ -98,6 +98,32 @@ func (q *Chan[T]) Receive(deadline time.Time) (v T, ok bool) {
 	return v, true
 }
 
+// ReceiveCtx is Receive that also returns (ok=false) when ctx is done. It uses
+// context.AfterFunc to wake waiters, so callers need no channels. Under simulation, pass a
+// context that is never canceled asynchronously.
+func (q *Chan[T]) ReceiveCtx(ctx context.Context, deadline time.Time) (v T, ok bool) {
+	stop := context.AfterFunc(ctx, func() {
+		q.l.Lock()
+		q.c.Broadcast()
+		q.l.Unlock()
+	})
+	defer stop()
+	q.l.Lock()
+	defer q.l.Unlock()
+	for len(q.items) == 0 && !q.closed && ctx.Err() == nil {
+		if deadline.IsZero() {
+			q.c.Wait()
+		} else if !q.c.WaitUntil(deadline) {
+			break
+		}
+	}
+	if len(q.items) == 0 || ctx.Err() != nil {
+		return v, false
+	}
+	v, q.items = q.items[0], q.items[1:]
+	return v, true
+}
+
 // TryReceive returns the head item without waiting.
 func (q *Chan[T]) TryReceive() (v T, ok bool) {
 	q.l.Lock()
