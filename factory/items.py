@@ -146,7 +146,9 @@ def front(it):
     i, m, owner, tier, title, deps, body, acc = it
     lines = ["---", f"title: \"{i} {title}\"", "kind: task", f"labels: [\"{m}\"]", "acceptance:"]
     lines += [f"  - \"{a.replace(chr(34), chr(39))}\"" for a in acc]
-    lines += ["---", body, "", f"Depends on: {', '.join(deps) or 'none'}.",
+    dep_line = (f"Dependencies: {', '.join(deps)}. All of them are already merged on main: items are moved to factory/ready only after their dependencies merge, so do not ask about them."
+                if deps else "Dependencies: none.")
+    lines += ["---", body, "", dep_line,
               "Spec: docs/SPEC.md. Do not edit existing tests; contract tests are owned by the human."]
     if i in ISSUES:
         lines.append(f"GitHub issue: niqbal/workflow-engine#{ISSUES[i]}")
