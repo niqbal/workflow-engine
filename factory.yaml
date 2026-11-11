@@ -36,6 +36,9 @@ execution:
   provider: local_worktree
   clone_dirs: []
   setup: []
+  # Local test database for pgstore (WI-030); trust auth, no secret.
+  env:
+    PG_URL: "postgres://nawabiqbal@localhost:5432/workflow_engine_test?sslmode=disable"
 
 # Tier comes only from these rules (items carry no tier labels; SPEC §15.2).
 tiers:

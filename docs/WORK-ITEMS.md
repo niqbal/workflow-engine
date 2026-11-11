@@ -230,7 +230,7 @@ Acceptance:
 
 ### WI-030 Postgres store (#23)
 
-internal/store/pgstore with pgx and versioned SQL migrations (SPEC §12). Tests use PG_URL or docker; skipped when unavailable.
+internal/store/pgstore with pgx v5 (new dependency allowed: github.com/jackc/pgx/v5) and versioned SQL migrations embedded with go:embed (SPEC §12). Tests read PG_URL (set in the factory sandbox to a local database); when PG_URL is set the tests must run, not skip. Isolation: every storetest Factory call creates a fresh schema (CREATE SCHEMA t_<random>; search_path set on the pool) and drops it in t.Cleanup. Fence check inside each write transaction (SELECT range_id ... FOR SHARE, compare), DBVersion compare-and-swap with UPDATE ... WHERE db_version = $expected, task IDs from per-(shard, kind) sequences or a counter row updated in the transaction. Calls rt.Yield() on entry when constructed WithRuntime, like memstore.
 
 Acceptance:
 - `storetest.Run` passes for pgstore
