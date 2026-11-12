@@ -388,3 +388,16 @@ and the factory needs a UI.
   done folders and the post-merge check; items carry `depends_on`;
   `github_sync.py --sync-done` writes done markers for closed hand-owned items so dependency
   checks see them.
+
+## 2026-11-12 — Step 24: Design for running on more than one machine
+
+- Question from the owner: can the engine run on laptop + mini.local? Not yet. `wfe` is a
+  stub, M4 is in the backlog, and even M4 as cut proves routing only over the simulated
+  network. There is no production `Transport`, no cluster config and no shared token key.
+- `docs/MULTI-MACHINE.md`: one Postgres on the LAN, two listeners per node (API and
+  node-to-node), static peers, HMAC between peers, no TLS on a trusted LAN. Rejected a static
+  shard split before M4: it would need routing that M4 deletes and would demo the property the
+  project exists to prove not holding.
+- New items: WI-053 HTTP transport (human, can start now), WI-054 cluster config and
+  `wfe server --config` (factory), WI-055 two-machine smoke test and runbook (factory), then an
+  owner run on mini.
