@@ -85,7 +85,7 @@ func (s *Server) StartWorkflow(ctx context.Context, r api.StartRequest) (api.Sta
 	key := store.RunKey{Shard: shard, WorkflowID: r.WorkflowID, RunID: s.newRunID()}
 	st, out := history.NewRun(history.StartInput{WorkflowID: r.WorkflowID, RunID: key.RunID, WorkflowType: r.WorkflowType,
 		TaskQueue: r.TaskQueue, RequestID: r.RequestID, Input: r.Input, ExecutionTimeout: r.ExecutionTimeout}, s.clk.Now())
-	if _, err := s.createRun(ctx, key, st, out); err != nil {
+	if _, err := s.createRunAndWake(ctx, key, st, out); err != nil {
 		return api.StartResponse{}, err
 	}
 	return api.StartResponse{RunID: key.RunID}, nil
@@ -100,7 +100,7 @@ func (s *Server) SignalWorkflow(ctx context.Context, r api.SignalRequest) error 
 	if err != nil {
 		return err
 	}
-	_, err = s.update(ctx, key, nil, func(m *history.Machine) error {
+	_, err = s.updateAndWake(ctx, key, nil, func(m *history.Machine) error {
 		return m.Signal(r.SignalName, r.Payload, r.RequestID)
 	})
 	return err
@@ -113,7 +113,7 @@ func (s *Server) TerminateWorkflow(ctx context.Context, r api.TerminateRequest) 
 	if err != nil {
 		return err
 	}
-	_, err = s.update(ctx, key, nil, func(m *history.Machine) error {
+	_, err = s.updateAndWake(ctx, key, nil, func(m *history.Machine) error {
 		if !m.S.Status.Open() {
 			return errNoChange
 		}
