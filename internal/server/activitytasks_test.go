@@ -149,14 +149,20 @@ func TestActivityTaskTokenRejectsForgedTokens(t *testing.T) {
 	forge := func(f func(*activityTaskToken)) string {
 		c := tok
 		f(&c)
-		s, _ := encodeActivityTaskToken(c)
+		s, _ := encodeActivityTaskToken(s.cfg.TokenKey, c)
 		return s
 	}
+	wrongKey := append([]byte(nil), s.cfg.TokenKey...)
+	wrongKey[0] ^= 1
+	wrongKeySigned, _ := encodeActivityTaskToken(wrongKey, tok)
+	flipped := flipTokenByte(t, at.TaskToken)
 	bads := []string{"", "garbage!", base64.RawURLEncoding.EncodeToString([]byte("not json")),
 		forge(func(c *activityTaskToken) { c.Shard = 1 - c.Shard }),
 		forge(func(c *activityTaskToken) { c.Attempt = 0 }),
 		forge(func(c *activityTaskToken) { c.ScheduledEventID = 0 }),
 		forge(func(c *activityTaskToken) { c.RunID = "" }),
+		wrongKeySigned,
+		flipped,
 	}
 	for _, bad := range bads {
 		if err := s.CompleteActivityTask(ctx, api.CompleteActivityTaskRequest{TaskToken: bad}); !errors.Is(err, api.ErrInvalidArgument) {

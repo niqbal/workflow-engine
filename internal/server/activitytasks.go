@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +15,8 @@ import (
 
 // WI-019: activity tasks (poll, complete, fail) (SPEC §3.2, §8.3).
 
-// activityTaskToken is what an activity task token carries. On the wire it is opaque: base64
-// of its JSON.
+// activityTaskToken is what an activity task token carries. On the wire it is an opaque,
+// signed token.
 type activityTaskToken struct {
 	Shard            int    `json:"shard"`
 	WorkflowID       string `json:"workflowID"`
@@ -30,23 +29,19 @@ func (t activityTaskToken) key() store.RunKey {
 	return store.RunKey{Shard: t.Shard, WorkflowID: t.WorkflowID, RunID: t.RunID}
 }
 
-func encodeActivityTaskToken(t activityTaskToken) (string, error) {
-	b, err := json.Marshal(t)
-	if err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+func encodeActivityTaskToken(key []byte, t activityTaskToken) (string, error) {
+	return encodeTaskToken(key, t)
+}
+
+func decodeActivityTaskToken(key []byte, tok string) (activityTaskToken, error) {
+	return decodeTaskToken[activityTaskToken](key, tok)
 }
 
 // decodeActivityTaskToken parses a token, rejecting anything this node could not have issued.
 func (s *Server) decodeActivityTaskToken(tok string) (activityTaskToken, error) {
-	var t activityTaskToken
-	b, err := base64.RawURLEncoding.DecodeString(tok)
+	t, err := decodeActivityTaskToken(s.cfg.TokenKey, tok)
 	if err != nil {
-		return t, invalid("malformed task token")
-	}
-	if err := json.Unmarshal(b, &t); err != nil {
-		return t, invalid("malformed task token")
+		return t, err
 	}
 	if t.WorkflowID == "" || t.RunID == "" || t.ScheduledEventID <= 0 || t.Attempt <= 0 ||
 		t.Shard != s.ShardFor(t.WorkflowID) {
@@ -105,7 +100,7 @@ func (s *Server) startActivityTask(ctx context.Context, t store.Task, identity s
 	if err != nil {
 		return nil, err
 	}
-	token, err := encodeActivityTaskToken(activityTaskToken{Shard: t.Run.Shard, WorkflowID: t.Run.WorkflowID,
+	token, err := encodeActivityTaskToken(s.cfg.TokenKey, activityTaskToken{Shard: t.Run.Shard, WorkflowID: t.Run.WorkflowID,
 		RunID: t.Run.RunID, ScheduledEventID: info.ScheduledEventID, Attempt: info.Attempt})
 	if err != nil {
 		return nil, err
