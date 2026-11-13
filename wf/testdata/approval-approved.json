@@ -181,8 +181,7 @@
   "type": "ActivityTaskCompleted",
   "attrs": {
    "scheduledEventID": 16,
-   "startedEventID": 17,
-   "result": null
+   "startedEventID": 17
   }
  },
  {

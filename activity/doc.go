@@ -1,2 +1,2 @@
-// Package activity: see docs/SPEC.md and docs/WORK-ITEMS.md. Not built yet.
+// Package activity is the activity-side helper API used by worker activities.
 package activity

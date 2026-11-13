@@ -62,6 +62,15 @@ func Replay(evs []history.Event, workflowFn any) error {
 	return nil
 }
 
+// SaveHistory writes evs as JSON, for golden files.
+func SaveHistory(path string, evs []history.Event) error {
+	b, err := json.MarshalIndent(evs, "", " ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
+}
+
 // ActivityFunc is an activity for Env: JSON in, JSON-able out.
 type ActivityFunc func(input json.RawMessage) (any, error)
 
@@ -234,9 +243,5 @@ func (e *Env) Result(out any) error {
 
 // SaveHistory writes the history as JSON, for golden files.
 func (e *Env) SaveHistory(path string) error {
-	b, err := json.MarshalIndent(e.History, "", " ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o644)
+	return SaveHistory(path, e.History)
 }
