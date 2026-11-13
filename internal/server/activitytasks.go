@@ -105,6 +105,10 @@ func (s *Server) startActivityTask(ctx context.Context, t store.Task, identity s
 	if err != nil {
 		return nil, err
 	}
+	s.metrics().IncActivityTasks()
+	if !info.StartedAt.IsZero() && !info.FirstScheduledAt.IsZero() {
+		s.metrics().ObserveScheduleToStart("activity", info.StartedAt.Sub(info.FirstScheduledAt))
+	}
 	return &api.ActivityTask{
 		TaskToken:        token,
 		WorkflowID:       t.Run.WorkflowID,
@@ -125,9 +129,18 @@ func (s *Server) CompleteActivityTask(ctx context.Context, r api.CompleteActivit
 	if err != nil {
 		return err
 	}
+	var stepLatency time.Duration
 	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
+		if a := m.S.Activities[tok.ScheduledEventID]; a != nil && a.Attempt == tok.Attempt && a.State == history.TaskStarted {
+			stepLatency = m.Now.Sub(a.StartedAt)
+		} else {
+			stepLatency = 0
+		}
 		return m.CompleteActivity(tok.ScheduledEventID, tok.Attempt, r.Result)
 	})
+	if err == nil && stepLatency > 0 {
+		s.metrics().ObserveStepLatency("activity", stepLatency)
+	}
 	return err
 }
 
@@ -138,8 +151,17 @@ func (s *Server) FailActivityTask(ctx context.Context, r api.FailActivityTaskReq
 	if err != nil {
 		return err
 	}
+	var stepLatency time.Duration
 	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
+		if a := m.S.Activities[tok.ScheduledEventID]; a != nil && a.Attempt == tok.Attempt && a.State == history.TaskStarted {
+			stepLatency = m.Now.Sub(a.StartedAt)
+		} else {
+			stepLatency = 0
+		}
 		return m.FailActivity(tok.ScheduledEventID, tok.Attempt, r.Failure)
 	})
+	if err == nil && stepLatency > 0 {
+		s.metrics().ObserveStepLatency("activity", stepLatency)
+	}
 	return err
 }

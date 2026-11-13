@@ -59,14 +59,18 @@ func (s *Server) processTimers(ctx context.Context, shard int) (int, error) {
 				continue
 			}
 			progress = true
-			if err := s.fireTimer(ctx, t); err != nil {
+			didFire, err := s.fireTimer(ctx, t)
+			if err != nil {
 				failed[t.ID] = true
 				if firstErr == nil {
 					firstErr = err
 				}
 				continue
 			}
-			fired++
+			if didFire {
+				s.metrics().ObserveTimerLag(s.clk.Now().Sub(t.FireAt))
+				fired++
+			}
 		}
 		if !progress {
 			return fired, firstErr
@@ -75,16 +79,25 @@ func (s *Server) processTimers(ctx context.Context, shard int) (int, error) {
 }
 
 // fireTimer applies one timer task to its run and deletes it in the same write.
-func (s *Server) fireTimer(ctx context.Context, t store.Task) error {
+// It reports whether the timer produced a TimerFired event (stale/re-fired tasks are no-ops).
+func (s *Server) fireTimer(ctx context.Context, t store.Task) (bool, error) {
 	var p TimerPayload
 	if err := json.Unmarshal(t.Payload, &p); err != nil {
-		return fmt.Errorf("server: decode timer task %d on shard %d: %w", t.ID, t.Shard, err)
+		return false, fmt.Errorf("server: decode timer task %d on shard %d: %w", t.ID, t.Shard, err)
 	}
+	didFire := false
 	_, err := s.updateAndWake(ctx, t.Run, []store.TaskKey{t.Key()}, func(m *history.Machine) error {
+		before := len(m.Out.Events)
 		m.FireTimer(p.Ref)
+		for _, ev := range m.Out.Events[before:] {
+			if ev.Type() == history.EventTimerFired {
+				didFire = true
+				break
+			}
+		}
 		return nil
 	})
-	return err
+	return didFire, err
 }
 
 // settleTimers fires every due timer task on every owned shard at the current time. It

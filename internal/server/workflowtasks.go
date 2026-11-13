@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/niqbal/workflow-engine/internal/history"
 	"github.com/niqbal/workflow-engine/internal/server/api"
@@ -107,6 +108,10 @@ func (s *Server) startWorkflowTask(ctx context.Context, t store.Task, identity s
 		n++
 	}
 	hist := append(evs[:n:n], transient...)
+	s.metrics().IncWorkflowTasks()
+	if !wt.StartedAt.IsZero() && !wt.ScheduledAt.IsZero() {
+		s.metrics().ObserveScheduleToStart("workflow", wt.StartedAt.Sub(wt.ScheduledAt))
+	}
 	return &api.WorkflowTask{TaskToken: token, WorkflowID: w.State.WorkflowID, RunID: w.State.RunID,
 		WorkflowType: w.State.WorkflowType, Attempt: wt.Attempt, History: hist}, nil
 }
@@ -117,9 +122,18 @@ func (s *Server) CompleteWorkflowTask(ctx context.Context, r api.CompleteWorkflo
 	if err != nil {
 		return err
 	}
+	var stepLatency time.Duration
 	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
+		if wt := m.S.WorkflowTask; wt != nil && wt.Seq == tok.Seq && wt.State == history.TaskStarted {
+			stepLatency = m.Now.Sub(wt.StartedAt)
+		} else {
+			stepLatency = 0
+		}
 		return m.CompleteWorkflowTask(tok.Seq, r.Commands)
 	})
+	if err == nil && stepLatency > 0 {
+		s.metrics().ObserveStepLatency("workflow", stepLatency)
+	}
 	return err
 }
 
@@ -129,8 +143,17 @@ func (s *Server) FailWorkflowTask(ctx context.Context, r api.FailWorkflowTaskReq
 	if err != nil {
 		return err
 	}
+	var stepLatency time.Duration
 	_, err = s.updateAndWake(ctx, tok.key(), nil, func(m *history.Machine) error {
+		if wt := m.S.WorkflowTask; wt != nil && wt.Seq == tok.Seq && wt.State == history.TaskStarted {
+			stepLatency = m.Now.Sub(wt.StartedAt)
+		} else {
+			stepLatency = 0
+		}
 		return m.FailWorkflowTask(tok.Seq, r.Cause)
 	})
+	if err == nil && stepLatency > 0 {
+		s.metrics().ObserveStepLatency("workflow", stepLatency)
+	}
 	return err
 }

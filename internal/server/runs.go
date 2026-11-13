@@ -123,10 +123,15 @@ func (s *Server) createRun(ctx context.Context, key store.RunKey, st *history.Mu
 	if err != nil {
 		return Written{}, err
 	}
+	start := s.clk.Now()
 	written, err := s.st.CreateRun(ctx, f, store.NewRun{Key: key, Events: recs, State: state, Tasks: tasks})
+	if errors.Is(err, store.ErrFenced) {
+		s.metrics().IncErrFenced()
+	}
 	if err != nil {
 		return Written{}, storeErr(err)
 	}
+	s.metrics().ObserveHistoryAppendLatency(s.clk.Now().Sub(start))
 	return Written{State: st, Out: out, Tasks: written}, nil
 }
 
@@ -161,7 +166,10 @@ func (s *Server) update(ctx context.Context, key store.RunKey, done []store.Task
 		m := history.NewMachine(st, s.clk.Now())
 		if ferr := fn(m); ferr != nil {
 			if errors.Is(ferr, history.ErrStaleTask) && len(done) > 0 {
-				_ = s.st.DeleteTasks(ctx, f, done) // best effort: a stale task's record
+				err := s.st.DeleteTasks(ctx, f, done) // best effort: a stale task's record
+				if errors.Is(err, store.ErrFenced) {
+					s.metrics().IncErrFenced()
+				}
 			}
 			return Written{}, HistoryErr(ferr)
 		}
@@ -177,15 +185,21 @@ func (s *Server) update(ctx context.Context, key store.RunKey, done []store.Task
 		if err != nil {
 			return Written{}, err
 		}
+		start := s.clk.Now()
 		_, written, err := s.st.UpdateRun(ctx, f, key, store.Update{ExpectedDBVersion: snap.DBVersion, Events: recs,
 			State: state, Open: st.Status.Open(), NewTasks: tasks, DoneTasks: done})
 		if errors.Is(err, store.ErrConflict) {
+			s.metrics().IncErrConflict()
 			lastErr = err
 			continue
+		}
+		if errors.Is(err, store.ErrFenced) {
+			s.metrics().IncErrFenced()
 		}
 		if err != nil {
 			return Written{}, storeErr(err)
 		}
+		s.metrics().ObserveHistoryAppendLatency(s.clk.Now().Sub(start))
 		return Written{State: st, Out: m.Out, Tasks: written}, nil
 	}
 	return Written{}, storeErr(lastErr)
