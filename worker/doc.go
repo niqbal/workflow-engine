@@ -1,2 +1,2 @@
-// Package worker: see docs/SPEC.md and docs/WORK-ITEMS.md. Not built yet.
+// Package worker runs workflow and activity task loops over an api.Service.
 package worker

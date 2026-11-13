@@ -14,7 +14,8 @@ import (
 	"github.com/niqbal/workflow-engine/wftest"
 )
 
-var update = flag.Bool("update", false, "rewrite golden histories in testdata/")
+// Kept for compatibility with existing commands; wf goldens are sourced from worker e2e tests.
+var update = flag.Bool("update", false, "worker package owns wf/testdata goldens; this flag does not rewrite them")
 
 type Request struct{ Ticket string }
 type Draft struct{ Text string }
@@ -69,9 +70,7 @@ func finish(t *testing.T, e *wftest.Env, golden string) Result {
 	}
 	path := filepath.Join("testdata", golden)
 	if *update {
-		if err := e.SaveHistory(path); err != nil {
-			t.Fatal(err)
-		}
+		t.Log("ignoring -update in wf tests; source of truth is worker TestApprovalExampleEndToEndAgainstInProcessServer")
 	}
 	if err := wftest.ReplayFromFile(path, Approval); err != nil {
 		t.Fatalf("golden %s does not replay: %v", golden, err)
