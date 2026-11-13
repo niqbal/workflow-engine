@@ -235,6 +235,7 @@ func (s *Server) wake(shard int, tasks []store.Task) {
 func (s *Server) createRunAndWake(ctx context.Context, key store.RunKey, st *history.MutableState, out history.Effects) (Written, error) {
 	w, err := s.createRun(ctx, key, st, out)
 	if err == nil {
+		s.observeWriteMetrics(w.Tasks, nil)
 		s.wake(key.Shard, w.Tasks)
 	}
 	return w, err
@@ -244,6 +245,7 @@ func (s *Server) createRunAndWake(ctx context.Context, key store.RunKey, st *his
 func (s *Server) updateAndWake(ctx context.Context, key store.RunKey, done []store.TaskKey, fn func(m *history.Machine) error) (Written, error) {
 	w, err := s.update(ctx, key, done, fn)
 	if err == nil {
+		s.observeWriteMetrics(w.Tasks, done)
 		s.wake(key.Shard, w.Tasks)
 	}
 	return w, err

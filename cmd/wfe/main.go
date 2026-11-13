@@ -115,8 +115,10 @@ func runServer(args []string, stdout, stderr io.Writer) error {
 	}
 
 	httpSrv := &http.Server{
-		Addr:    *listen,
-		Handler: httpapi.New(s.Service(), httpapi.Options{}),
+		Addr: *listen,
+		Handler: httpapi.New(s.Service(), httpapi.Options{
+			Metrics: s.Metrics().Handler(),
+		}),
 	}
 	go func() {
 		<-ctx.Done()

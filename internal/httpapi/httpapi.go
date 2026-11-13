@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/niqbal/workflow-engine/internal/history"
+	wfemetrics "github.com/niqbal/workflow-engine/internal/metrics"
 	"github.com/niqbal/workflow-engine/internal/server/api"
 )
 
@@ -47,7 +48,7 @@ func StatusFor(code string) int {
 
 // Options configures the handler.
 type Options struct {
-	// Metrics serves GET /metrics. Nil serves an empty Prometheus exposition (WI-061 fills it).
+	// Metrics serves GET /metrics. Nil uses the default process metrics exposition.
 	Metrics http.Handler
 	// MaxBodyBytes limits request bodies. Zero means 16 MiB.
 	MaxBodyBytes int64
@@ -67,9 +68,7 @@ func New(svc api.Service, opts Options) http.Handler {
 	}
 	metrics := opts.Metrics
 	if metrics == nil {
-		metrics = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		})
+		metrics = wfemetrics.Default().Handler()
 	}
 	m := h.mux
 	m.HandleFunc("POST /v1/workflows", h.start)

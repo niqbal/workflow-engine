@@ -97,6 +97,8 @@ func (s *Server) Start(ctx context.Context) error {
 		s.fences[shard] = f
 		s.mu.Unlock()
 	}
+	s.refreshShardGaugeMetric()
+	s.refreshPendingTimersMetric()
 	return nil
 }
 

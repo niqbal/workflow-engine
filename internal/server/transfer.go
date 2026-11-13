@@ -85,8 +85,12 @@ func (s *Server) processTransfer(ctx context.Context, shard int) (int, error) {
 	for _, t := range present {
 		live[t.ID] = true
 		ts.observe(t.ID)
-		if due, ok := ts.pushed[t.ID]; ok && now.Before(due) {
-			continue
+		redispatch := false
+		if due, ok := ts.pushed[t.ID]; ok {
+			if now.Before(due) {
+				continue
+			}
+			redispatch = true
 		}
 		// A task that cannot be pushed is retried at its redispatch time like any other.
 		ts.pushed[t.ID] = now.Add(s.cfg.RedispatchInterval)
@@ -95,6 +99,9 @@ func (s *Server) processTransfer(ctx context.Context, shard int) (int, error) {
 				firstErr = err
 			}
 			continue
+		}
+		if redispatch {
+			s.metrics().IncRedispatch()
 		}
 		pushed++
 	}
