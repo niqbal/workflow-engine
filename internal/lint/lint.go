@@ -14,9 +14,18 @@ import (
 )
 
 // Scope lists the server packages that must be deterministic under simulation.
+// Paths under Excluded are skipped even when they sit inside a scope root.
 var Scope = []string{
 	"internal/server", "internal/shard", "internal/history",
 	"internal/store/memstore", "internal/store/pgstore",
+}
+
+// Excluded lists packages that may use the real network. They sit outside the
+// simulation scope, next to each other (SPEC §6.1, WI-053): internal/httpapi is
+// the public HTTP API, and internal/transport/httptransport is node-to-node HTTP.
+var Excluded = []string{
+	"internal/httpapi",
+	"internal/transport/httptransport",
 }
 
 // Exempt lists packages inside Scope that are allowed to break the rules.
@@ -42,9 +51,18 @@ func CheckDir(root string) ([]Violation, error) {
 		if _, err := os.Stat(base); err != nil {
 			continue
 		}
+		if isExcluded(root, base) {
+			continue
+		}
 		err := filepath.WalkDir(base, func(p string, e fs.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if isExcluded(root, p) {
+				if e.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
 			}
 			if e.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
 				return nil
@@ -92,7 +110,7 @@ func CheckSource(filename string, src []byte) ([]Violation, error) {
 		case path == "math/rand" || path == "math/rand/v2" || path == "crypto/rand":
 			add(im, "imports "+path+" (use internal/rnd)")
 		case path == "net" || strings.HasPrefix(path, "net/"):
-			add(im, "imports "+path+" (use internal/transport; HTTP lives in internal/httpapi)")
+			add(im, "imports "+path+" (use internal/transport; HTTP lives in internal/httpapi and internal/transport/httptransport)")
 		case path == "sync":
 			add(im, "imports sync (use internal/xsync; sync/atomic is allowed)")
 		}
@@ -151,4 +169,20 @@ func isMapLiteralish(e ast.Expr) bool {
 	}
 	_, isMap := cl.Type.(*ast.MapType)
 	return isMap
+}
+
+// isExcluded reports whether path is a package in Excluded, or a file inside one.
+func isExcluded(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	for _, ex := range Excluded {
+		ex = filepath.ToSlash(ex)
+		if rel == ex || strings.HasPrefix(rel, ex+"/") {
+			return true
+		}
+	}
+	return false
 }
