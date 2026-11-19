@@ -102,8 +102,8 @@ ITEMS = [
   ["Restart mid-run: all runs complete, no duplicate TimerFired"]),
 
  # ---------------- M3: simulation ----------------
- ("WI-040","M3","human",3,"Cluster simulation harness",["WI-010","WI-024"],
-  "sim.Run(seed, workload, faults): N nodes, memstore, simulated workers, quiet phase (SPEC §11.1).",
+ ("WI-040","M3","factory",3,"Cluster simulation harness",["WI-010","WI-024"],
+  "sim.Run(seed, workload, faults): N nodes, memstore, simulated workers, quiet phase (SPEC §11.1). The fault and oracle hooks stay empty interfaces for WI-041 and WI-042 (human-owned). Owner decision (2026-11-19): moved from human to factory; list every change outside sim/ under OWNER REVIEW.",
   ["Same seed yields byte-identical traces across 20 runs", "A 30-day virtual timer workload runs in under 5 s wall time"]),
  ("WI-041","M3","human",3,"Oracle I1-I8 with ghost log",["WI-040"],
   "Checks from SPEC §11.3; I6 reads a ghost log outside the store; I8 derives the reference from final history.",
@@ -128,8 +128,8 @@ ITEMS = [
  ("WI-052","M4","factory",2,"Task-queue routing",["WI-050"],
   "Queue q lives on the owner of shard hash(q); history pushes and frontend polls go there (SPEC §9, D10).",
   ["Simulation with 3 nodes: workers polling any node receive every task; no oracle violations over 2,000 seeds"]),
- ("WI-053","M4","human",3,"HTTP transport between nodes",["WI-002"],
-  "internal/transport/httptransport per docs/MULTI-MACHINE.md: Call as JSON POST to the peer's /internal/v1/<method>, a Handler that dispatches registered methods, HMAC header over the body with the cluster key. Connection errors, timeouts and bodyless 5xx become ErrUnreachable (ambiguous); typed {code, message} replies come back as their error. No retries inside the transport. Add the package to the determinism lint's exclusions next to internal/httpapi. Human-owned: a lost reply reported as a clean failure causes duplicate writes the simulator cannot see.",
+ ("WI-053","M4","factory",3,"HTTP transport between nodes",["WI-002"],
+  "internal/transport/httptransport per docs/MULTI-MACHINE.md: Call as JSON POST to the peer's /internal/v1/<method>, a Handler that dispatches registered methods, HMAC header over the body with the cluster key. Connection errors, timeouts and bodyless 5xx become ErrUnreachable (ambiguous); typed {code, message} replies come back as their error. No retries inside the transport. Add the package to the determinism lint's exclusions next to internal/httpapi. A lost reply reported as a clean failure causes duplicate writes the simulator cannot see, so every path that can lose a reply must return ErrUnreachable. Owner decision (2026-11-19): moved from human to factory because the acceptance table pins that mapping; list the lint exclusion under OWNER REVIEW.",
   ["Table test over real loopback: refused, reset mid-reply, timeout, 5xx, typed error and success each map to the right result",
    "A call with a wrong or missing HMAC is rejected before dispatch",
    "Lint passes with the package excluded and still fails on a planted violation elsewhere"]),
