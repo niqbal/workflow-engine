@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/niqbal/workflow-engine/internal/engine"
@@ -14,13 +15,9 @@ import (
 	"github.com/niqbal/workflow-engine/internal/server"
 	"github.com/niqbal/workflow-engine/internal/server/api"
 	"github.com/niqbal/workflow-engine/internal/simrt"
+	"github.com/niqbal/workflow-engine/internal/store"
 	"github.com/niqbal/workflow-engine/internal/store/memstore"
 )
-
-// Faults is the fault-injection hook (WI-042). It has no methods yet: Run accepts any
-// value, including nil, and does not call it. Faults stop at the quiet phase once the
-// hook exists.
-type Faults interface{}
 
 // Registry binds workflow and activity code for the simulated workers.
 type Registry interface {
@@ -68,8 +65,9 @@ type Result struct {
 type Cluster struct {
 	rt     *simrt.Runtime
 	st     *memstore.Store
-	nodes  []*server.Server
-	faults Faults
+	slots  []*node
+	shards int
+	faults *Faults
 	oracle Oracle
 	rec    *Record
 
@@ -80,13 +78,21 @@ type Cluster struct {
 	quiet   bool
 }
 
-// Run executes workload under seed. faults is ignored until WI-042; pass nil.
-func Run(seed uint64, wl Workload, faults Faults) (res Result) {
+// Run executes workload under seed. A nil faults (or one with nothing set) injects nothing
+// and leaves the run identical to one with no injector.
+func Run(seed uint64, wl Workload, faults *Faults) (res Result) {
 	wl = wl.normalized()
 	rt := simrt.New(seed, simrt.Start)
 	defer func() {
 		if p := recover(); p != nil && res.Err == nil {
 			res.Err = fmt.Errorf("sim: %v", p)
+			// A panic (a livelock above all) is the case where the trace matters most, so
+			// keep what the run produced before it died.
+			if res.Trace == nil {
+				res.Trace = rt.Trace()
+				res.Now = rt.Now()
+				res.Seed = seed
+			}
 		}
 	}()
 	defer rt.Close()
@@ -96,7 +102,7 @@ func Run(seed uint64, wl Workload, faults Faults) (res Result) {
 		oracle = Invariants{}
 	}
 	rec := &Record{Seed: seed, Finals: map[string]Final{}, Ledger: wl.Ledger,
-		Workflows: map[string]engine.Workflow{}, Reference: wl.Reference}
+		Workflows: map[string]engine.Workflow{}, Reference: wl.Reference, Epsilon: faults.epsilon()}
 	c := &Cluster{rt: rt, faults: faults, oracle: oracle, rec: rec}
 	reg := newRegistry()
 	if wl.Register != nil {
@@ -111,6 +117,9 @@ func Run(seed uint64, wl Workload, faults Faults) (res Result) {
 		return
 	}
 	c.startWorkers(reg, wl)
+	if faults.any() {
+		rt.Go("faults", func(ctx context.Context) { faults.run(ctx, c) })
+	}
 	rt.Go("workload", func(ctx context.Context) {
 		var err error
 		if wl.Run != nil {
@@ -164,6 +173,10 @@ func Run(seed uint64, wl Workload, faults Faults) (res Result) {
 // collectFinals reads each started run's end state into the record.
 func (c *Cluster) collectFinals() {
 	ctx := context.Background()
+	c.rec.Incarnations = make([]int, len(c.slots))
+	for i, n := range c.slots {
+		c.rec.Incarnations[i] = n.starts
+	}
 	for _, id := range c.ids {
 		if _, done := c.rec.Finals[id]; done {
 			continue
@@ -205,57 +218,75 @@ func (w Workload) normalized() Workload {
 func (c *Cluster) boot(seed uint64, wl Workload) error {
 	// The ghost log (I6): every committed write, in commit order, recorded outside the
 	// store so the fence check does not read back the state it is judging.
-	c.st = memstore.New(memstore.WithRuntime(c.rt),
+	opts := []memstore.Option{
+		memstore.WithRuntime(c.rt),
 		memstore.WithCommitLog(func(e memstore.CommitEntry) {
 			c.rec.Commits = append(c.rec.Commits, e)
-		}))
+		}),
+	}
+	if c.faults.storeFaults() {
+		opts = append(opts, memstore.WithFaults(c.faults.hooks(c.rt.Rand(), c.rt.Tracef, c.rt.InTask, c.Quiet)))
+	}
+	c.st = memstore.New(opts...)
+	c.shards = wl.Shards
 	key := tokenKey(seed)
 	ctx := context.Background()
-	c.nodes = make([]*server.Server, wl.Nodes)
+	cfg := server.Config{NumShards: wl.Shards, LongPoll: wl.LongPoll, TokenKey: key}
+	c.slots = make([]*node, wl.Nodes)
 	for i := 0; i < wl.Nodes; i++ {
-		cfg := server.Config{
-			Node:      fmt.Sprintf("node-%d", i),
-			NumShards: wl.Shards,
-			LongPoll:  wl.LongPoll,
-			TokenKey:  key,
-		}
-		n := server.New(c.rt, c.st, rnd.New(split(seed, i)), cfg)
-		if err := n.StartOwned(ctx, ownedShards(i, wl.Nodes, wl.Shards)); err != nil {
+		c.slots[i] = &node{c: c, index: i, seed: seed, cfgBase: cfg,
+			shards: ownedShards(i, wl.Nodes, wl.Shards), skew: c.skewFor(i)}
+	}
+	// Defaults are needed before the first incarnation starts: a pause is measured against
+	// the lease, and server.Config fills that in itself.
+	for _, n := range c.slots {
+		if err := n.start(ctx); err != nil {
 			return err
 		}
-		if err := n.Run(ctx); err != nil {
-			return err
-		}
-		c.nodes[i] = n
+		n.cfgBase.LeaseDuration = n.srv.Config().LeaseDuration
 	}
 	return nil
 }
 
+// skewFor draws one node's clock offset, within plus or minus ClockSkewMax.
+func (c *Cluster) skewFor(i int) time.Duration {
+	max := c.faults.epsilon()
+	if max <= 0 {
+		return 0
+	}
+	r := c.rt.Rand()
+	off := time.Duration(uint64(r.Int63()) % uint64(2*max+1))
+	return off - max
+}
+
 func (c *Cluster) startWorkers(reg *registry, wl Workload) {
-	for ni := 0; ni < len(c.nodes); ni++ {
-		node := c.nodes[ni]
+	for ni := 0; ni < len(c.slots); ni++ {
+		index := ni
 		for w := 0; w < wl.Workers; w++ {
 			for _, queue := range wl.TaskQueues {
 				id := fmt.Sprintf("n%d-w%d", ni, w)
 				q := queue
-				svc := node.Service()
 				c.rt.Go(id+"-"+q+"-workflow", func(ctx context.Context) {
-					c.workflowLoop(ctx, svc, reg, q, id)
+					c.workflowLoop(ctx, index, reg, q, id)
 				})
 				c.rt.Go(id+"-"+q+"-activity", func(ctx context.Context) {
-					c.activityLoop(ctx, svc, reg, q, id)
+					c.activityLoop(ctx, index, reg, q, id)
 				})
 			}
 		}
 	}
 }
 
-// NumNodes is how many servers share the store.
-func (c *Cluster) NumNodes() int { return len(c.nodes) }
+// NumNodes is how many node slots share the store.
+func (c *Cluster) NumNodes() int { return len(c.slots) }
 
-// Node returns one server. Reads may go to any node; writes for a workflow must go to
-// the node that owns its shard, which is what StartWorkflow does.
-func (c *Cluster) Node(i int) *server.Server { return c.nodes[i] }
+// Node returns a node's current incarnation, or nil while it is down. Reads may go to any
+// node; writes for a workflow must go to the node that owns its shard, which is what
+// StartWorkflow does.
+func (c *Cluster) Node(i int) *server.Server { return c.slots[i].server() }
+
+// Incarnations is how many times a node has been started, which a crash increments.
+func (c *Cluster) Incarnations(i int) int { return c.slots[i].starts }
 
 // Rand is the deterministic RNG for the code under test.
 func (c *Cluster) Rand() rnd.Rand { return c.rt.Rand() }
@@ -284,6 +315,58 @@ func (c *Cluster) StartWorkflow(ctx context.Context, r api.StartRequest) (api.St
 	c.rec.Starts = append(c.rec.Starts, StartRecord{WorkflowID: r.WorkflowID, RunID: resp.RunID,
 		Type: r.WorkflowType, TaskQueue: r.TaskQueue, RequestID: r.RequestID})
 	return resp, nil
+}
+
+// StartRetrying starts a workflow, retrying a transient failure with the same request ID.
+// That is what a client must do when a call's outcome is unknown: the start either committed
+// or it did not, and the request ID makes the retry safe either way (G1, SPEC §8.4).
+func (c *Cluster) StartRetrying(ctx context.Context, r api.StartRequest) (api.StartResponse, error) {
+	var last error
+	for attempt := 1; attempt <= clientAttempts; attempt++ {
+		resp, err := c.StartWorkflow(ctx, r)
+		if err == nil || !transientForClient(err) {
+			return resp, err
+		}
+		last = err
+		c.rt.Sleep(clientRetryDelay)
+	}
+	return api.StartResponse{}, fmt.Errorf("sim: start %s gave up after %d attempts: %w",
+		r.WorkflowID, clientAttempts, last)
+}
+
+// SignalRetrying signals a workflow, retrying a transient failure with the same request ID.
+// G7 makes the retry exactly-once in history however many times it is sent.
+func (c *Cluster) SignalRetrying(ctx context.Context, r api.SignalRequest) error {
+	var last error
+	for attempt := 1; attempt <= clientAttempts; attempt++ {
+		err := c.SignalWorkflow(ctx, r)
+		if err == nil || !transientForClient(err) {
+			return err
+		}
+		last = err
+		c.rt.Sleep(clientRetryDelay)
+	}
+	return fmt.Errorf("sim: signal %s gave up after %d attempts: %w", r.WorkflowID, clientAttempts, last)
+}
+
+const (
+	clientAttempts   = 50
+	clientRetryDelay = 100 * time.Millisecond
+)
+
+// transientForClient reports whether a client should retry. An injected store fault, an
+// ambiguous commit, a node that is down or a lost shard are all "unknown outcome, try
+// again"; anything else is a real answer the workload must honour.
+func transientForClient(err error) bool {
+	switch {
+	case errors.Is(err, errInjected), errors.Is(err, errAmbiguous), errors.Is(err, errDown):
+		return true
+	case errors.Is(err, store.ErrFenced), errors.Is(err, store.ErrConflict):
+		return true
+	case errors.Is(err, api.ErrNotOwner):
+		return true
+	}
+	return false
 }
 
 // SignalWorkflow delivers a signal on the owning node. Every outcome is recorded for I7:
@@ -345,12 +428,35 @@ func (c *Cluster) observe(workflowID, runID, source string, evs []history.Event)
 		Source: source, At: c.rt.Now(), Events: evs})
 }
 
+// owner returns the node that owns the workflow's shard. While that node is down, a caller
+// inside a simulator task waits for its next incarnation, which is what a client retrying
+// through a crash does; the harness's own reads, outside any task, get errDown instead.
 func (c *Cluster) owner(workflowID string) (*server.Server, error) {
-	if len(c.nodes) == 0 {
+	if len(c.slots) == 0 {
 		return nil, fmt.Errorf("sim: cluster has no nodes")
 	}
-	shard := c.nodes[0].ShardFor(workflowID)
-	return c.nodes[shard%len(c.nodes)], nil
+	n := c.slots[c.shardFor(workflowID)%len(c.slots)]
+	for {
+		if srv := n.server(); srv != nil {
+			return srv, nil
+		}
+		if !c.rt.InTask() {
+			return nil, fmt.Errorf("%w: node-%d", errDown, n.index)
+		}
+		c.rt.Sleep(10 * time.Millisecond)
+	}
+}
+
+// ShardFor maps a workflow ID to its shard, as the owning node would.
+func (c *Cluster) ShardFor(workflowID string) int { return c.shardFor(workflowID) }
+
+// shardFor maps a workflow ID to its shard exactly as server.ShardFor does. The cluster
+// needs the mapping to pick a node before it has a live server to ask, so the hash is
+// repeated here; TestWI042ShardForMatchesServer keeps the two in step.
+func (c *Cluster) shardFor(workflowID string) int {
+	h := fnv.New32a()
+	h.Write([]byte(workflowID))
+	return int(h.Sum32() % uint32(c.shards))
 }
 
 func (c *Cluster) fail(err error) {

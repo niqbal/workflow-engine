@@ -67,6 +67,9 @@ type Record struct {
 	Ledger    *Ledger
 	Workflows map[string]engine.Workflow
 
+	// Incarnations is how many times each node was started: one, plus a restart per crash.
+	Incarnations []int
+
 	// Epsilon is the maximum clock skew between nodes that faults may introduce. I4 allows a
 	// timer to fire that much before its fireAt, and no more.
 	Epsilon time.Duration
@@ -178,10 +181,36 @@ func checkI2Prefixes(r *Record) error {
 			return fmt.Errorf("%s observed by %s at %s: %d events, longer than the final history (%d)",
 				snap.WorkflowID, snap.Source, snap.At.UTC().Format(time.RFC3339Nano), len(snap.Events), len(f.Events))
 		}
+		// A workflow task is served as the durable prefix plus the events the server has
+		// just applied (internal/server/workflowtasks.go). Those trailing events are not
+		// durable yet: a task rescheduled before the write lands changes its attempt, and
+		// the copy a worker is handed can carry the time of an earlier attempt. So what I2
+		// holds against the final history is:
+		//
+		//	ID and type		always, for every event observed: this is the prefix itself
+		//	payload			for every event before the last workflow task the snapshot
+		//					starts, which is the part that was already durable
+		//	timestamp		never later than the final one: an observed event may carry a
+		//					time from before it was written, but history never moves back
+		//
+		// A rewrite of durable history fails all three; a transient tail fails none.
+		durable := durableLen(snap.Events)
 		for i, e := range snap.Events {
-			if err := sameEvent(e, f.Events[i]); err != nil {
+			want := f.Events[i]
+			if err := sameEventShape(e, want); err != nil {
 				return fmt.Errorf("%s observed by %s at %s: event %d is not the final one: %w",
 					snap.WorkflowID, snap.Source, snap.At.UTC().Format(time.RFC3339Nano), e.ID, err)
+			}
+			if e.Time.After(want.Time) {
+				return fmt.Errorf("%s observed by %s at %s: event %d was seen at %s but the final history writes it earlier, at %s: history moved backwards",
+					snap.WorkflowID, snap.Source, snap.At.UTC().Format(time.RFC3339Nano), e.ID,
+					e.Time.UTC().Format(time.RFC3339Nano), want.Time.UTC().Format(time.RFC3339Nano))
+			}
+			if i < durable {
+				if err := sameEvent(e, want); err != nil {
+					return fmt.Errorf("%s observed by %s at %s: durable event %d is not the final one: %w",
+						snap.WorkflowID, snap.Source, snap.At.UTC().Format(time.RFC3339Nano), e.ID, err)
+				}
 			}
 		}
 	}
@@ -370,12 +399,23 @@ func checkI6Fences(r *Record) error {
 // that was closed or absent, and left no trace (G7).
 func checkI7Signals(r *Record) error {
 	type key struct{ id, requestID string }
+	// A client retries a signal whose outcome is unknown with the same request ID, so a
+	// rejected call is only a lost signal if no call with that ID was ever acknowledged.
+	everAcked := map[key]bool{}
+	for _, s := range r.Signals {
+		if s.Err == nil && s.RequestID != "" {
+			everAcked[key{s.WorkflowID, s.RequestID}] = true
+		}
+	}
 	acked := map[key]bool{}
 	for _, s := range r.Signals {
 		f, ok := r.Finals[s.WorkflowID]
 		if s.Err != nil {
 			if !ok {
 				continue // no run: a rejection is the only correct answer
+			}
+			if s.RequestID != "" && everAcked[key{s.WorkflowID, s.RequestID}] {
+				continue // a retry of this call was acknowledged
 			}
 			if f.Status.Open() {
 				return fmt.Errorf("%s: signal %q was rejected (%v) although the run was open",
@@ -523,6 +563,32 @@ func sameEvent(got, want history.Event) error {
 	}
 	if string(a) != string(b) {
 		return fmt.Errorf("attributes %s, final history has %s", a, b)
+	}
+	return nil
+}
+
+// durableLen is how much of a served history was already durable: everything before the
+// last workflow task in it, which is the one the server started as it served the snapshot.
+func durableLen(evs []history.Event) int {
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type() == history.EventWorkflowTaskStarted {
+			// The task's own scheduled event may have been written in the same step.
+			if i > 0 && evs[i-1].Type() == history.EventWorkflowTaskScheduled {
+				return i - 1
+			}
+			return i
+		}
+	}
+	return len(evs)
+}
+
+// sameEventShape compares only ID and type, for an event observed before it was durable.
+func sameEventShape(got, want history.Event) error {
+	if got.ID != want.ID {
+		return fmt.Errorf("ID %d, final history has %d", got.ID, want.ID)
+	}
+	if got.Type() != want.Type() {
+		return fmt.Errorf("type %s, final history has %s", got.Type(), want.Type())
 	}
 	return nil
 }

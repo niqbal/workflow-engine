@@ -106,8 +106,8 @@ func TestSameSeedIdenticalTrace(t *testing.T) {
 			t.Fatalf("run %d diverged from run 1 (seed %d): %s", n, seed, d)
 		}
 	}
-	// A non-nil empty fault hook must not change the trace.
-	withFaults := sim.Run(seed, wl, struct{}{})
+	// A non-nil injector with nothing enabled must not change the trace.
+	withFaults := sim.Run(seed, wl, sim.NoFaults)
 	requireClosed(t, withFaults)
 	if d := diffAt(want, traceBytes(withFaults.Trace)); d != "" {
 		t.Fatalf("faults value changed the trace: %s", d)

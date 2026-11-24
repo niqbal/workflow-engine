@@ -129,6 +129,10 @@ func (r *Runtime) park() {
 	}
 }
 
+// InTask reports whether the caller is running inside a simulator task. A driver (a test,
+// or the harness between runs) is not, and must not make blocking calls.
+func (r *Runtime) InTask() bool { return r.current != nil }
+
 // Yield lets the scheduler pick any runnable task, possibly this one.
 func (r *Runtime) Yield() {
 	if r.current == nil {

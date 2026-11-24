@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
+
+	"github.com/niqbal/workflow-engine/internal/store"
 
 	"github.com/niqbal/workflow-engine/activity"
 	"github.com/niqbal/workflow-engine/internal/engine"
@@ -59,11 +62,21 @@ func (r *registry) RegisterActivity(activityType string, fn any) error {
 	return nil
 }
 
-func (c *Cluster) workflowLoop(ctx context.Context, svc api.Service, reg *registry, queue, id string) {
+// workflowLoop polls node index for workflow tasks. It resolves the node's service on every
+// pass, so a worker follows the node through a crash and restart instead of holding a dead
+// incarnation; errors from an incarnation that is going away are retried, not fatal.
+func (c *Cluster) workflowLoop(ctx context.Context, index int, reg *registry, queue, id string) {
 	poll := api.PollRequest{TaskQueue: queue, Identity: id}
 	for {
+		svc := c.waitForService(index)
+		if svc == nil {
+			return
+		}
 		task, err := svc.PollWorkflowTask(ctx, poll)
 		if err != nil {
+			if c.transient(err, index) {
+				continue
+			}
 			c.fail(fmt.Errorf("sim: poll workflow %s: %w", id, err))
 			return
 		}
@@ -73,28 +86,78 @@ func (c *Cluster) workflowLoop(ctx context.Context, svc api.Service, reg *regist
 		// The history the server served is an observation of it (I2).
 		c.observe(task.WorkflowID, task.RunID, "task:"+id, task.History)
 		if err := handleWorkflowTask(ctx, svc, reg, queue, id, task); err != nil {
+			if c.transient(err, index) {
+				continue
+			}
 			c.fail(err)
 			return
 		}
 	}
 }
 
-func (c *Cluster) activityLoop(ctx context.Context, svc api.Service, reg *registry, queue, id string) {
+func (c *Cluster) activityLoop(ctx context.Context, index int, reg *registry, queue, id string) {
 	poll := api.PollRequest{TaskQueue: queue, Identity: id}
 	for {
+		svc := c.waitForService(index)
+		if svc == nil {
+			return
+		}
 		task, err := svc.PollActivityTask(ctx, poll)
 		if err != nil {
+			if c.transient(err, index) {
+				continue
+			}
 			c.fail(fmt.Errorf("sim: poll activity %s: %w", id, err))
 			return
 		}
 		if task == nil {
 			continue
 		}
-		if err := handleActivityTask(ctx, svc, reg, id, task); err != nil {
+		if err := c.handleActivityTask(ctx, svc, reg, id, task); err != nil {
+			if c.transient(err, index) {
+				continue
+			}
 			c.fail(err)
 			return
 		}
 	}
+}
+
+// waitForService returns the node's current frontend, waiting out a crash. It returns nil
+// only when the run is halting.
+func (c *Cluster) waitForService(index int) api.Service {
+	for {
+		if c.halt {
+			return nil
+		}
+		if svc := c.serviceFor(index); svc != nil {
+			return svc
+		}
+		c.rt.Sleep(10 * time.Millisecond)
+	}
+}
+
+// transient reports whether err is what a worker sees when the incarnation it was talking to
+// went away, or when an injected store fault hit the call. The worker retries those against
+// whatever incarnation is current; anything else is a bug and fails the run.
+func (c *Cluster) transient(err error, index int) bool {
+	if err == nil || c.halt {
+		return false
+	}
+	switch {
+	case errors.Is(err, errInjected), errors.Is(err, errAmbiguous), errors.Is(err, errDown):
+		return true
+	case errors.Is(err, store.ErrFenced), errors.Is(err, store.ErrConflict):
+		// The node lost its shard, or another writer got there first.
+		return true
+	case errors.Is(err, api.ErrStaleTask), errors.Is(err, api.ErrNotFound):
+		return true
+	case errors.Is(err, context.Canceled):
+		// The incarnation's loops were stopped under this call.
+		return true
+	}
+	// A call that raced a crash on this node is transient too, however it failed.
+	return c.slots[index].server() == nil
 }
 
 func handleWorkflowTask(ctx context.Context, svc api.Service, reg *registry, queue, id string, task *api.WorkflowTask) error {
@@ -142,7 +205,7 @@ func workflowFailure(err error) history.Failure {
 	return history.Failure{Type: typ, Message: err.Error()}
 }
 
-func handleActivityTask(ctx context.Context, svc api.Service, reg *registry, id string, task *api.ActivityTask) error {
+func (c *Cluster) handleActivityTask(ctx context.Context, svc api.Service, reg *registry, id string, task *api.ActivityTask) error {
 	fn, ok := reg.activities[task.ActivityType]
 	if !ok {
 		return failActivity(ctx, svc, id, task.TaskToken, history.Failure{
@@ -162,6 +225,13 @@ func handleActivityTask(ctx context.Context, svc api.Service, reg *registry, id 
 		Deadline:       task.Deadline,
 	})
 	result, err := runActivity(fn, actCtx, task.Input)
+	// The worker dies here, after the activity's side effect and before the server hears
+	// about it (SPEC §11.2). The attempt is lost, the activity times out and runs again,
+	// and the idempotency key is what keeps the effect at one (G4, I5).
+	if c.faults.workerCrashes(c.rt.Rand()) {
+		c.rt.Tracef("fault worker-crash %s %s attempt %d", id, task.ActivityType, task.Attempt)
+		return nil
+	}
 	if err != nil {
 		return failActivity(ctx, svc, id, task.TaskToken, history.Failure{
 			Type:    "ActivityError",
