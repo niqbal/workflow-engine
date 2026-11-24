@@ -20,7 +20,9 @@ import (
 	"github.com/niqbal/workflow-engine/internal/rnd"
 	"github.com/niqbal/workflow-engine/internal/server"
 	"github.com/niqbal/workflow-engine/internal/server/api"
+	"github.com/niqbal/workflow-engine/internal/store"
 	"github.com/niqbal/workflow-engine/internal/store/memstore"
+	"github.com/niqbal/workflow-engine/internal/store/pgstore"
 	"github.com/niqbal/workflow-engine/internal/xsync"
 )
 
@@ -80,11 +82,14 @@ func runServer(args []string, stdout, stderr io.Writer) error {
 	redispatch := fs.Duration("redispatch-interval", 30*time.Second, "task redispatch interval")
 	lease := fs.Duration("lease-duration", 30*time.Second, "shard lease duration")
 	seed := fs.Uint64("seed", 1, "deterministic run ID seed")
+	storeURL := fs.String("store", "", "Postgres URL; empty uses the in-memory store, which a restart loses")
+	tokenKey := fs.String("token-key", "", "HMAC key for task tokens; must match across restarts and nodes")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  wfe server [flags]")
 		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "Run one server node using an in-memory store.")
+		fmt.Fprintln(stderr, "Run one server node. Without --store it keeps everything in memory,")
+		fmt.Fprintln(stderr, "so a restart starts empty; with --store it survives one.")
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Flags:")
 		fs.PrintDefaults()
@@ -103,13 +108,27 @@ func runServer(args []string, stdout, stderr io.Writer) error {
 	defer stop()
 
 	rt := xsync.NewReal(ctx)
-	st := memstore.New(memstore.WithRuntime(rt))
+	var st store.Store
+	if *storeURL == "" {
+		st = memstore.New(memstore.WithRuntime(rt))
+	} else {
+		pg, err := pgstore.Open(ctx, *storeURL)
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer pg.Close()
+		if err := pg.Migrate(ctx); err != nil {
+			return fmt.Errorf("migrate store: %w", err)
+		}
+		st = pg
+	}
 	s := server.New(rt, st, rnd.New(*seed), server.Config{
 		Node:               *node,
 		NumShards:          *numShards,
 		LongPoll:           *longPoll,
 		RedispatchInterval: *redispatch,
 		LeaseDuration:      *lease,
+		TokenKey:           []byte(*tokenKey),
 	})
 	if err := s.Start(ctx); err != nil {
 		return fmt.Errorf("start server: %w", err)

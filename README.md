@@ -84,7 +84,8 @@ the store is down, and G5's lower bound if real skew exceeds ε.
 | **Cluster harness** ([`sim`](sim)) | N nodes, simulated workers, virtual clock and quiet phase; 20 runs of a seed produce byte-identical traces, and 30 days of virtual timers finish in under 5 s |
 | **The oracle** ([`sim/oracle.go`](sim/oracle.go)) | Invariants I1-I8 on every simulated run: runs close, history is append-only and never rewritten, replay reproduces the recorded commands, timers fire once and never early, each idempotency key is applied once, no write escapes its shard's fence, acknowledged signals appear exactly once, and results match a reference model derived from the same history |
 | **Fault injection** ([`sim/faults.go`](sim/faults.go)) | Node crash and restart, process pauses that outlast a lease, failed writes, ambiguous commits, commit delays that reorder the outbox, per-node clock skew, and workers that die after a side effect — all from the seed, all stopping at the quiet phase |
-| **Seed sweeps** (`wfe sim --seeds 1-200`) | Five workloads under every fault at once. A failing seed is written to `sim/failures/<seed>.txt` with the verdict, the fault set and the trace |
+| **Seed sweeps** (`wfe sim --seeds 1-200`) | Six workloads, including the agent showcase, under every fault at once. A failing seed is written to `sim/failures/<seed>.txt` with the verdict, the fault set and the trace |
+| **The showcase's own test** ([`examples/agent/agent_test.go`](examples/agent/agent_test.go)) | A worker is killed after the refund reaches the ledger and before it reports; the next worker finishes the run and the ledger still holds exactly one payment |
 | **Timestamp monotonicity, token signing, HTTP transport, metrics** | Covered by their own package tests |
 
 Everything above runs on every push, with `-race`, against both stores. See
@@ -150,9 +151,61 @@ The run waits there until a worker registered for queue `q` polls for the task �
 with [`worker.New`](worker/worker.go), as `worker/worker_test.go` does. Prometheus metrics are
 at `/metrics` on the same listener.
 
+## The showcase: an agent that cannot refund twice
+
+[`examples/agent`](examples/agent) is a support agent whose tool calls are activities and
+whose human approval is a signal. The interesting part is not that it calls tools; it is that
+it cannot lose or repeat a refund.
+
+```bash
+PG_URL=postgres://localhost:5432/postgres?sslmode=disable examples/agent/demo.sh
+```
+
+The demo kills things at the two moments that matter. First, while the run is parked waiting
+for a human, it kills **the server and the worker**, restarts both, and shows the run still
+open with its 24-hour timer armed. Then a reviewer approves the refund with `curl`, the worker
+applies the money to the payment ledger and stops before reporting it, and the demo kills the
+worker **in exactly that window** — the one place where an at-least-once activity could charge
+a customer twice.
+
+The history tells the rest. Note the worker identity changing across the restarts, and
+`"attempt":2` on the refund that the killed worker had already applied:
+
+```
+17  TimerStarted                {"timerID":"t1","fireAt":"2026-11-26T03:32:24Z"}      <- parked for a human
+18  WorkflowExecutionSignaled   {"signalName":"approval","payload":{"approved":true}}  <- curl, after the restart
+22  ActivityTaskScheduled       {"activityType":"IssueRefund","input":{"cents":18900}}
+23  ActivityTaskStarted         {"attempt":2,"workerIdentity":"worker-8560"}           <- a third worker
+24  ActivityTaskCompleted       {"scheduledEventID":22,"startedEventID":23}
+34  WorkflowExecutionCompleted  {"result":{"status":"replied","refundedCents":18900}}
+```
+
+```
+== The payment ledger
+2026-11-24T22:32:24Z  A-2002   $189.00  ticket-1795559541/0707a01d6329783f/22
+
+1 entry, $189.00 in total
+```
+
+One refund, after two kills and three workers. The key in that ledger line is the activity's
+`IdempotencyKey` — `workflowID/runID/scheduledEventID` — which is the same for every attempt,
+so the sink applies the refund once and every later attempt is a no-op.
+
+What is *not* claimed: that the model was called once. A crash can repeat the `Plan` activity,
+which costs money rather than correctness, and the demo says so. The claim is exactly-once
+effects at idempotent sinks.
+
+The same agent runs under the simulator as one of its workloads, so the claim is checked by
+the oracle on every seed and not only by its own demo:
+
+```bash
+go run ./cmd/wfe sim --workload agent --seeds 1-100
+```
+
 ## Architecture
 
 ```
+examples/agent/ The showcase: the agent workflow, its sinks and the demo
 wf/            Workflow SDK: Context, ExecuteActivity, NewTimer, Selector, signal channels
 worker/        Polls task queues, replays workflow code, runs activities
 client/        HTTP client for the public API, with retries
@@ -179,8 +232,8 @@ refers to impossible to disagree.
 Built and green: the single-node engine end to end (M0–M2), durable Postgres storage, crash
 recovery, HTTP API and Go client, node-to-node HTTP transport, CLI, Prometheus metrics,
 signed task tokens, and the whole of M3 — the deterministic cluster harness, the oracle, the
-fault injectors, the workload mix and the seed sweep. 33 of 41 work items are merged; ~26k
-lines of Go, of which more than half are tests.
+fault injectors, the workload mix and the seed sweep — and M6, the agent showcase with its
+demo. 35 of 41 work items are merged; ~27.5k lines of Go, of which more than half are tests.
 
 Not built yet, and deliberately named rather than implied:
 
@@ -191,8 +244,6 @@ Not built yet, and deliberately named rather than implied:
   routing work below.
 - **Sharding across nodes** (M4: request routing to the shard owner, task-queue routing).
   Leases and fencing are implemented and tested; the routing layer above them is not.
-- **The showcase** (M6): the crash-proof LLM agent of SPEC §14 and its demo script.
-  `examples/agent` is a placeholder.
 - `GetVersion` (WI-060), shard leases and placement (WI-050), the one-million-timer
   benchmark, and everything in SPEC §1.2's non-goals.
 

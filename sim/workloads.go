@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/niqbal/workflow-engine/activity"
+	"github.com/niqbal/workflow-engine/examples/agent"
 	"github.com/niqbal/workflow-engine/internal/history"
 	"github.com/niqbal/workflow-engine/internal/server/api"
 	"github.com/niqbal/workflow-engine/wf"
@@ -47,6 +48,7 @@ func Workloads() map[string]Builder {
 		"timers":  Timers,
 		"fanout":  Fanout,
 		"signals": Signals,
+		"agent":   Agent,
 	}
 }
 
@@ -325,4 +327,70 @@ func signalPayloadReference(name string) func(string, []history.Event) (json.Raw
 		}
 		return nil, fmt.Errorf("no %q signal in history", name)
 	}
+}
+
+// Agent is the showcase under the simulator (SPEC §11.4): the support agent of
+// examples/agent, with the scripted model, run as one more workload so the crash-proof refund
+// claim is checked by the oracle on every seed rather than only by its own demo.
+//
+// The ledger behind the refund is the sim's own, so I5 holds the "exactly one refund" claim
+// directly: the agent's sink and the invariant are the same ledger.
+func Agent() Workload {
+	led := NewLedger()
+	wl := base()
+	wl.Ledger = led
+	wl.QuietLimit = 3 * 24 * time.Hour
+	wl.Register = func(r Registry) error {
+		acts := agent.Activities{
+			Model:    agent.Scripted{},
+			Orders:   agent.DemoOrders(),
+			Payments: ledgerSink{led},
+			Mail:     ledgerSink{led},
+		}
+		return acts.Register(r)
+	}
+	wl.Run = func(ctx context.Context, c *Cluster) error {
+		// One small refund that needs no human, one large one that does.
+		tickets := []agent.Ticket{
+			{ID: "t-small", Customer: "Ada", OrderID: "A-1001", Text: "arrived cracked"},
+			{ID: "t-large", Customer: "Grace", OrderID: "A-2002", Text: "arrived broken"},
+		}
+		for _, t := range tickets {
+			in, err := json.Marshal(t)
+			if err != nil {
+				return err
+			}
+			if _, err := c.StartRetrying(ctx, api.StartRequest{WorkflowID: t.ID,
+				WorkflowType: agent.WorkflowType, TaskQueue: "q", Input: in, RequestID: t.ID}); err != nil {
+				return err
+			}
+		}
+		// Approve the large one well inside its 24-hour window.
+		c.Sleep(30 * time.Minute)
+		payload, err := json.Marshal(agent.Approval{Approved: true, By: "reviewer"})
+		if err != nil {
+			return err
+		}
+		return c.SignalRetrying(ctx, api.SignalRequest{WorkflowID: "t-large",
+			SignalName: agent.ApprovalSignal, Payload: payload, RequestID: "approval-t-large"})
+	}
+	// Both tickets end replied, with the refund the order was worth.
+	wl.Reference = func(id string, evs []history.Event) (json.RawMessage, error) {
+		switch id {
+		case "t-small":
+			return json.RawMessage(`{"status":"replied","refundedCents":2400,"reply":"Thanks for letting us know, Ada. We have refunded order A-1001 in full ($24.00). It should reach your account within a few days."}`), nil
+		case "t-large":
+			return json.RawMessage(`{"status":"replied","refundedCents":18900,"approval":"approved","reply":"Thanks for letting us know, Grace. We have refunded order A-2002 in full ($189.00). It should reach your account within a few days."}`), nil
+		}
+		return nil, fmt.Errorf("no reference for %s", id)
+	}
+	return wl
+}
+
+// ledgerSink lets the agent's sinks be the simulator's ledger, so the agent's own
+// idempotency claim is what I5 checks.
+type ledgerSink struct{ led *Ledger }
+
+func (s ledgerSink) Apply(key string, value any) (bool, error) {
+	return s.led.Apply(key, nil), nil
 }
