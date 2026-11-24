@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: build, vet, gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+  test:
+    name: tests (race, in-memory store)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Includes the determinism lint (internal/lint), the replay tests and the
+      # cluster simulation harness, which must produce byte-identical traces per seed.
+      - run: go test -race -count=1 ./...
+
+  contract:
+    name: scenario contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: contract scenarios
+        run: |
+          set -o pipefail
+          status=0
+          go test -count=1 -v -run 'TestContract_' ./... 2>&1 | tee contract.log || status=$?
+          echo "passing scenarios: $(grep -cE '^--- PASS' contract.log || true)"
+          echo "failing scenarios: $(grep -cE '^--- FAIL' contract.log || true)"
+          exit $status
+
+  postgres:
+    name: store contract suite on Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The suite creates and drops its own schema per test; it skips without PG_URL.
+      - run: go test -count=1 -v ./internal/store/pgstore/...
+        env:
+          PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
