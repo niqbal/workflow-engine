@@ -46,6 +46,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runServer(args[1:], stdout, stderr)
 	case "workflow":
 		return runWorkflow(args[1:], stdout, stderr)
+	case "sim":
+		return runSim(args[1:], stdout, stderr)
 	default:
 		printRootHelp(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -56,12 +58,14 @@ func printRootHelp(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  wfe server [flags]")
 	fmt.Fprintln(w, "  wfe workflow <start|signal|history> ...")
+	fmt.Fprintln(w, "  wfe sim [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  server                 Run a single-node server with in-memory store")
 	fmt.Fprintln(w, "  workflow start         Start a workflow")
 	fmt.Fprintln(w, "  workflow signal        Send a signal to a workflow")
 	fmt.Fprintln(w, "  workflow history       Print workflow history events")
+	fmt.Fprintln(w, "  sim                    Run the deterministic simulator over a range of seeds")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Use 'wfe <command> --help' for command-specific flags.")
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/niqbal/workflow-engine/internal/history"
+	"github.com/niqbal/workflow-engine/internal/server/api"
 	"github.com/niqbal/workflow-engine/internal/store"
 	"github.com/niqbal/workflow-engine/internal/xsync"
 )
@@ -237,7 +238,9 @@ func (s *Server) createRunAndWake(ctx context.Context, key store.RunKey, st *his
 	if err == nil {
 		s.observeWriteMetrics(w.Tasks, nil)
 		s.wake(key.Shard, w.Tasks)
+		return w, nil
 	}
+	s.wakeUncertain(key.Shard, err)
 	return w, err
 }
 
@@ -247,6 +250,38 @@ func (s *Server) updateAndWake(ctx context.Context, key store.RunKey, done []sto
 	if err == nil {
 		s.observeWriteMetrics(w.Tasks, done)
 		s.wake(key.Shard, w.Tasks)
+		return w, nil
 	}
+	s.wakeUncertain(key.Shard, err)
 	return w, err
+}
+
+// wakeUncertain rings a shard's loops after a write that may have committed anyway.
+//
+// A store can commit and then fail to report it (SPEC §8.1): the write is durable, its outbox
+// tasks exist, and the caller is told it failed. Waking only on success would leave those
+// tasks undispatched with nothing to wake the loops, and both loops wait without a deadline
+// when they know of no due task, so the shard could sleep through an outbox that is not
+// empty. A run whose first workflow task was written that way never starts at all, which the
+// simulator found as a liveness failure on one seed in ten (docs/SIM-BUGS.md, 2026-11-25).
+//
+// Errors that prove nothing was written need no wake: a rejected fence means this node no
+// longer owns the shard, and an invalid write never reached the store.
+func (s *Server) wakeUncertain(shard int, err error) {
+	switch {
+	case errors.Is(err, store.ErrFenced), errors.Is(err, api.ErrNotOwner):
+		return // not ours any more; the owner's own loops will scan
+	case errors.Is(err, store.ErrInvalid), errors.Is(err, api.ErrInvalidArgument):
+		return // never reached the store
+	}
+	ls := s.sub.loops.Load()
+	if ls == nil {
+		return
+	}
+	if w, ok := ls.transfer[shard]; ok {
+		w.ring()
+	}
+	if w, ok := ls.timers[shard]; ok {
+		w.ring()
+	}
 }

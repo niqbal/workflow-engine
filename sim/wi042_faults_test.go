@@ -121,12 +121,10 @@ func TestWI042StoreFaultsFire(t *testing.T) {
 	requireHealthyEnd(t, res)
 }
 
-// Each store fault alone is survived at a much higher rate than the one above: 10% failed
-// writes, 5% ambiguous commits or 2 s commit delays each finish on this workload and seed.
-// Compounding all three at those rates stalls a run for the rest of the simulation, which is
-// an open finding, not a known-good case: docs/SIM-BUGS.md has the reproduction.
-func TestWI042StoreFaultsCompoundedStallARun(t *testing.T) {
-	t.Skip("open finding: see docs/SIM-BUGS.md, 2026-11-25 'Compounded store faults stall a run'")
+// The rates that used to stall a run: 10% failed writes, 5% ambiguous commits and commit
+// delays up to 2 s at once. The stall was an uncertain write whose outbox tasks were never
+// dispatched (docs/SIM-BUGS.md, 2026-11-25); this is the regression test for that fix.
+func TestWI042CompoundedStoreFaultsStillFinish(t *testing.T) {
 	res := sim.Run(23, chaosWorkload(sim.NewLedger(), 3), &sim.Faults{
 		StoreErrorRate: 0.1,
 		AmbiguousRate:  0.05,
@@ -223,9 +221,8 @@ func TestWI042SameSeedSameRunUnderFaults(t *testing.T) {
 // TestWI042EveryFaultAtOnceOverSeeds is the run the simulator exists for: the whole cluster
 // under every fault, judged by every invariant, across a range of seeds.
 //
-// The range stops at 12 because seed 13 leaves a run open for the rest of the simulation,
-// which is an open liveness finding and not a flake: docs/SIM-BUGS.md has it, and
-// `wfe sim --seeds 13` reproduces it on its own.
+// Seeds 1-25: seed 13 used to leave a run open for the rest of the simulation, which is the
+// liveness bug docs/SIM-BUGS.md records as found and fixed.
 func TestWI042EveryFaultAtOnceOverSeeds(t *testing.T) {
 	all := &sim.Faults{
 		CrashEvery:      30 * time.Second,
@@ -236,7 +233,7 @@ func TestWI042EveryFaultAtOnceOverSeeds(t *testing.T) {
 		ClockSkewMax:    250 * time.Millisecond,
 		WorkerCrashRate: 0.1,
 	}
-	for seed := uint64(1); seed <= 12; seed++ {
+	for seed := uint64(1); seed <= 25; seed++ {
 		led := sim.NewLedger()
 		res := sim.Run(seed, chaosWorkload(led, 3), all)
 		if res.Err != nil {

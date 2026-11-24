@@ -80,12 +80,23 @@ the store is down, and G5's lower bound if real skew exceeds ε.
 | **Scenario contracts** ([`contracttest`](contracttest), `internal/server/contract_test.go`) | 26 end-to-end scenarios over the server, fixed up front as the definition of correct behaviour. Agents working in this repo are forbidden to edit them |
 | **Replay tests** ([`internal/engine/replay_test.go`](internal/engine/replay_test.go)) | Histories replay to identical command sequences; non-determinism is detected and blocks the run rather than corrupting it |
 | **Crash-recovery simulation** ([`internal/server/recovery_sim_test.go`](internal/server/recovery_sim_test.go)) | Server crash and restart under virtual time, with the old incarnation's writes fenced out |
-| **Fault injection** ([`internal/store/memstore/faults_test.go`](internal/store/memstore/faults_test.go)) | Store errors, ambiguous commits and commit-latency reordering at the outbox |
+| **Store fault injection** ([`internal/store/memstore/faults_test.go`](internal/store/memstore/faults_test.go)) | Store errors, ambiguous commits and commit-latency reordering at the outbox |
 | **Cluster harness** ([`sim`](sim)) | N nodes, simulated workers, virtual clock and quiet phase; 20 runs of a seed produce byte-identical traces, and 30 days of virtual timers finish in under 5 s |
+| **The oracle** ([`sim/oracle.go`](sim/oracle.go)) | Invariants I1-I8 on every simulated run: runs close, history is append-only and never rewritten, replay reproduces the recorded commands, timers fire once and never early, each idempotency key is applied once, no write escapes its shard's fence, acknowledged signals appear exactly once, and results match a reference model derived from the same history |
+| **Fault injection** ([`sim/faults.go`](sim/faults.go)) | Node crash and restart, process pauses that outlast a lease, failed writes, ambiguous commits, commit delays that reorder the outbox, per-node clock skew, and workers that die after a side effect — all from the seed, all stopping at the quiet phase |
+| **Seed sweeps** (`wfe sim --seeds 1-200`) | Five workloads under every fault at once. A failing seed is written to `sim/failures/<seed>.txt` with the verdict, the fault set and the trace |
 | **Timestamp monotonicity, token signing, HTTP transport, metrics** | Covered by their own package tests |
 
 Everything above runs on every push, with `-race`, against both stores. See
-[Status](#status) for the checks that are specified but not yet built.
+[Status](#status) for what is not built yet.
+
+The simulator has already earned its keep. It found a liveness bug that left one run in ten
+stuck forever under injected faults: a store that commits a write and then reports it as
+failed left a shard's outbox undispatched, because the loops are woken by successful writes
+and wait without a deadline when they know of nothing due. Isolating the faults one at a time
+narrowed a seven-fault interaction to that single cause.
+[docs/SIM-BUGS.md](docs/SIM-BUGS.md) has the seeds, the mechanism, the fix and the design
+alternative that was rejected.
 
 ## Try it
 
@@ -101,6 +112,12 @@ That prints `passing scenarios: 26`. For the race detector and vet as CI runs th
 
 ```bash
 make ci
+```
+
+Sweep seeds through the simulator, with every fault injected and every invariant checked:
+
+```bash
+go run ./cmd/wfe sim --seeds 1-200 --workload basic
 ```
 
 The Postgres suite is skipped unless you point it at a database:
@@ -161,21 +178,23 @@ refers to impossible to disagree.
 
 Built and green: the single-node engine end to end (M0–M2), durable Postgres storage, crash
 recovery, HTTP API and Go client, node-to-node HTTP transport, CLI, Prometheus metrics,
-signed task tokens, and the deterministic cluster harness. 27 of 41 work items are merged;
-~23k lines of Go, of which about half are tests.
+signed task tokens, and the whole of M3 — the deterministic cluster harness, the oracle, the
+fault injectors, the workload mix and the seed sweep. 33 of 41 work items are merged; ~26k
+lines of Go, of which more than half are tests.
 
 Not built yet, and deliberately named rather than implied:
 
-- **The simulation oracle and fault injectors** (WI-041, WI-042). The harness is
-  deterministic and the seams are in place, but the invariant checks I1–I8 and the injected
-  crashes, partitions, pauses and clock skew of [SPEC §11](docs/SPEC.md) are still ahead.
-  Faults today are injected per component, not across the cluster.
+- **Message-level network faults.** The simulated cluster's nodes talk only through the shared
+  store, so there are no inter-node messages to drop, delay or partition yet; a paused node is
+  the observable equivalent of one partitioned from the store. Node-to-node HTTP exists
+  (WI-053) but is not on the simulator's path, and the injectors for it belong with the
+  routing work below.
 - **Sharding across nodes** (M4: request routing to the shard owner, task-queue routing).
   Leases and fencing are implemented and tested; the routing layer above them is not.
 - **The showcase** (M6): the crash-proof LLM agent of SPEC §14 and its demo script.
   `examples/agent` is a placeholder.
-- Versioning beyond `GetVersion`, the one-million-timer benchmark, and everything in
-  SPEC §1.2's non-goals.
+- `GetVersion` (WI-060), shard leases and placement (WI-050), the one-million-timer
+  benchmark, and everything in SPEC §1.2's non-goals.
 
 [docs/BUILD-LOG.md](docs/BUILD-LOG.md) records every step and decision in order, including
 the ones that were wrong.
@@ -205,6 +224,7 @@ work items.
 | [docs/WORK-ITEMS.md](docs/WORK-ITEMS.md) | The spec cut into work items with acceptance criteria |
 | [docs/BUILD-LOG.md](docs/BUILD-LOG.md) | Every step taken, in order, with decisions and their reasons |
 | [docs/MULTI-MACHINE.md](docs/MULTI-MACHINE.md) | Design for a cluster across machines |
+| [docs/SIM-BUGS.md](docs/SIM-BUGS.md) | Every bug the simulator found: seed, mechanism, fix |
 | [docs/REVIEWING.md](docs/REVIEWING.md) | How factory jobs are reviewed and steered |
 | [AGENTS.md](AGENTS.md) | The rules agents work under |
 
