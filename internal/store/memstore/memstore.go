@@ -26,6 +26,24 @@ type Faults struct {
 	CommitDelay func(op string) time.Duration
 }
 
+// CommitEntry is one write that took effect, for the simulator's ghost log (SPEC §11.3, I6).
+//
+// Op is the Store method. Fence is the fence the write carried, except for AcquireShard,
+// where Granted is true and Fence is the epoch the store just handed out. An ambiguous
+// commit (a write that took effect and then returned an error through Faults.AfterCommit)
+// is recorded like any other, which is the point: the ghost log says what the store did,
+// not what the caller was told.
+type CommitEntry struct {
+	Op      string
+	Fence   store.Fence
+	Granted bool
+	Run     store.RunKey
+}
+
+// CommitLog receives every committed write, in commit order, while the store's lock is
+// held. It must not block and must not call back into the store.
+type CommitLog func(CommitEntry)
+
 // Option configures a Store.
 type Option func(*Store)
 
@@ -34,6 +52,10 @@ func WithRuntime(rt xsync.Runtime) Option { return func(s *Store) { s.rt = rt } 
 
 // WithFaults installs fault hooks.
 func WithFaults(f Faults) Option { return func(s *Store) { s.faults = f } }
+
+// WithCommitLog installs a commit log. The simulator keeps the log outside the store, so
+// invariant I6 does not have to trust the store's own view of who owns a shard.
+func WithCommitLog(l CommitLog) Option { return func(s *Store) { s.clog = l } }
 
 type queueKey struct {
 	shard int
@@ -54,6 +76,7 @@ type run struct {
 type Store struct {
 	rt     xsync.Runtime
 	faults Faults
+	clog   CommitLog
 	mu     xsync.Locker
 	delay  xsync.Cond // never signalled; commit delays wait on it with a deadline
 
@@ -135,6 +158,14 @@ func (s *Store) write(op string, check func() error, alloc func(), apply func())
 		}
 	}
 	return nil
+}
+
+// logCommit appends to the commit log. Called from an apply closure, with mu held, so the
+// log order is the order writes became visible.
+func (s *Store) logCommit(e CommitEntry) {
+	if s.clog != nil {
+		s.clog(e)
+	}
 }
 
 // checkFence reports whether f authorizes writes to shard. Called with mu held.
@@ -245,6 +276,7 @@ func (s *Store) AcquireShard(ctx context.Context, shard int, owner string, now t
 			sh.Owner = owner
 			sh.LeaseExpiresAt = now.Add(lease)
 			f = store.Fence{Shard: shard, Owner: owner, RangeID: sh.RangeID}
+			s.logCommit(CommitEntry{Op: "AcquireShard", Fence: f, Granted: true})
 		})
 	if err != nil {
 		return store.Fence{}, err
@@ -257,7 +289,10 @@ func (s *Store) RenewShard(ctx context.Context, f store.Fence, now time.Time, le
 	return s.write("RenewShard",
 		func() error { return s.checkFence(f, f.Shard) },
 		nil,
-		func() { s.shards[f.Shard].LeaseExpiresAt = now.Add(lease) })
+		func() {
+			s.shards[f.Shard].LeaseExpiresAt = now.Add(lease)
+			s.logCommit(CommitEntry{Op: "RenewShard", Fence: f})
+		})
 }
 
 // CreateRun writes a new run with its first events, state and tasks.
@@ -293,6 +328,7 @@ func (s *Store) CreateRun(ctx context.Context, f store.Fence, r store.NewRun) ([
 			}
 			s.latest[workflowKey{r.Key.Shard, r.Key.WorkflowID}] = r.Key
 			s.putTasks(written)
+			s.logCommit(CommitEntry{Op: "CreateRun", Fence: f, Run: r.Key})
 		})
 	if err != nil {
 		return nil, err
@@ -335,6 +371,7 @@ func (s *Store) UpdateRun(ctx context.Context, f store.Fence, key store.RunKey, 
 			s.deleteTasks(u.DoneTasks)
 			s.putTasks(written)
 			version = r.snap.DBVersion
+			s.logCommit(CommitEntry{Op: "UpdateRun", Fence: f, Run: key})
 		})
 	if err != nil {
 		return 0, nil, err
@@ -430,7 +467,10 @@ func (s *Store) DeleteTasks(ctx context.Context, f store.Fence, keys []store.Tas
 			return checkKeys(keys, f.Shard)
 		},
 		nil,
-		func() { s.deleteTasks(keys) })
+		func() {
+			s.deleteTasks(keys)
+			s.logCommit(CommitEntry{Op: "DeleteTasks", Fence: f})
+		})
 }
 
 func cloneEvents(evs []store.EventRecord) []store.EventRecord {

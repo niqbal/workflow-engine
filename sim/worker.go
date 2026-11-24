@@ -70,6 +70,8 @@ func (c *Cluster) workflowLoop(ctx context.Context, svc api.Service, reg *regist
 		if task == nil {
 			continue
 		}
+		// The history the server served is an observation of it (I2).
+		c.observe(task.WorkflowID, task.RunID, "task:"+id, task.History)
 		if err := handleWorkflowTask(ctx, svc, reg, queue, id, task); err != nil {
 			c.fail(err)
 			return

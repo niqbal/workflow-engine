@@ -2,8 +2,12 @@ package sim
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/niqbal/workflow-engine/internal/engine"
 
 	"github.com/niqbal/workflow-engine/internal/history"
 	"github.com/niqbal/workflow-engine/internal/rnd"
@@ -17,9 +21,6 @@ import (
 // value, including nil, and does not call it. Faults stop at the quiet phase once the
 // hook exists.
 type Faults interface{}
-
-// Oracle is the invariant hook (WI-041). It has no methods yet and Run does not call it.
-type Oracle interface{}
 
 // Registry binds workflow and activity code for the simulated workers.
 type Registry interface {
@@ -36,9 +37,19 @@ type Workload struct {
 	TaskQueues []string      // queues workers poll; empty means "q"
 	QuietLimit time.Duration // virtual deadline of the quiet phase; <= 0 means 366 days
 	LongPoll   time.Duration // server long-poll; <= 0 means QuietLimit
-	Oracle     Oracle        // reserved for WI-041
 	Register   func(Registry) error
 	Run        func(ctx context.Context, c *Cluster) error
+
+	// Oracle checks the invariants after the quiet phase. Nil means Invariants{}: every
+	// check of SPEC §11.3. Use NoOracle for a workload that is deliberately not correct,
+	// such as one that leaves a run open on purpose.
+	Oracle Oracle
+	// Ledger is the side-effect ledger activities apply through, for I5. Nil means the
+	// workload has no external effects to check.
+	Ledger *Ledger
+	// Reference is the I8 model: the result each workflow must produce, derived from its
+	// own final history.
+	Reference func(id string, evs []history.Event) (json.RawMessage, error)
 }
 
 // Result is one execution of Run.
@@ -48,6 +59,8 @@ type Result struct {
 	Err    error
 	Closed bool      // every workflow started through Cluster is closed
 	Now    time.Time // virtual time when the run stopped
+	Oracle error     // the invariant violations found, also joined into Err
+	Record *Record   // what the run observed, for the oracle and for failure reports
 }
 
 // Cluster is the N nodes, the shared store and the virtual clock of one run.
@@ -58,6 +71,7 @@ type Cluster struct {
 	nodes  []*server.Server
 	faults Faults
 	oracle Oracle
+	rec    *Record
 
 	ids     []string
 	done    bool
@@ -77,7 +91,13 @@ func Run(seed uint64, wl Workload, faults Faults) (res Result) {
 	}()
 	defer rt.Close()
 
-	c := &Cluster{rt: rt, faults: faults, oracle: wl.Oracle}
+	oracle := wl.Oracle
+	if oracle == nil {
+		oracle = Invariants{}
+	}
+	rec := &Record{Seed: seed, Finals: map[string]Final{}, Ledger: wl.Ledger,
+		Workflows: map[string]engine.Workflow{}, Reference: wl.Reference}
+	c := &Cluster{rt: rt, faults: faults, oracle: oracle, rec: rec}
 	reg := newRegistry()
 	if wl.Register != nil {
 		if err := wl.Register(reg); err != nil {
@@ -85,6 +105,7 @@ func Run(seed uint64, wl Workload, faults Faults) (res Result) {
 			return
 		}
 	}
+	rec.Workflows = reg.workflows
 	if err := c.boot(seed, wl); err != nil {
 		res.Err = err
 		return
@@ -128,7 +149,35 @@ func Run(seed uint64, wl Workload, faults Faults) (res Result) {
 		res.Err = fmt.Errorf("sim: quiet phase ended (%s) at %s with workflows still open; tasks: %s",
 			runResult(reason), rt.Now().UTC().Format(time.RFC3339), rt.Tasks())
 	}
+
+	// The oracle runs on the record, after the cluster has stopped. Reads from here on are
+	// outside any simulator task, so they add nothing to the trace: turning the oracle on
+	// must not change the simulation it is judging.
+	rec.QuietDeadline = reason == simrt.Deadline
+	c.collectFinals()
+	res.Record = rec
+	res.Oracle = oracle.Check(rec)
+	res.Err = errors.Join(res.Err, res.Oracle)
 	return res
+}
+
+// collectFinals reads each started run's end state into the record.
+func (c *Cluster) collectFinals() {
+	ctx := context.Background()
+	for _, id := range c.ids {
+		if _, done := c.rec.Finals[id]; done {
+			continue
+		}
+		d, err := c.DescribeWorkflow(ctx, id)
+		if err != nil {
+			continue
+		}
+		evs, err := c.readHistory(ctx, id)
+		if err != nil {
+			continue
+		}
+		c.rec.Finals[id] = Final{RunID: d.RunID, Status: d.Status, Events: evs}
+	}
 }
 
 func (w Workload) normalized() Workload {
@@ -154,7 +203,12 @@ func (w Workload) normalized() Workload {
 }
 
 func (c *Cluster) boot(seed uint64, wl Workload) error {
-	c.st = memstore.New(memstore.WithRuntime(c.rt))
+	// The ghost log (I6): every committed write, in commit order, recorded outside the
+	// store so the fence check does not read back the state it is judging.
+	c.st = memstore.New(memstore.WithRuntime(c.rt),
+		memstore.WithCommitLog(func(e memstore.CommitEntry) {
+			c.rec.Commits = append(c.rec.Commits, e)
+		}))
 	key := tokenKey(seed)
 	ctx := context.Background()
 	c.nodes = make([]*server.Server, wl.Nodes)
@@ -227,16 +281,22 @@ func (c *Cluster) StartWorkflow(ctx context.Context, r api.StartRequest) (api.St
 		return resp, err
 	}
 	c.ids = append(c.ids, r.WorkflowID)
+	c.rec.Starts = append(c.rec.Starts, StartRecord{WorkflowID: r.WorkflowID, RunID: resp.RunID,
+		Type: r.WorkflowType, TaskQueue: r.TaskQueue, RequestID: r.RequestID})
 	return resp, nil
 }
 
-// SignalWorkflow delivers a signal on the owning node.
+// SignalWorkflow delivers a signal on the owning node. Every outcome is recorded for I7:
+// an acknowledged signal must appear exactly once in history, a rejected one not at all.
 func (c *Cluster) SignalWorkflow(ctx context.Context, r api.SignalRequest) error {
 	n, err := c.owner(r.WorkflowID)
 	if err != nil {
 		return err
 	}
-	return n.SignalWorkflow(ctx, r)
+	err = n.SignalWorkflow(ctx, r)
+	c.rec.Signals = append(c.rec.Signals, SignalRecord{WorkflowID: r.WorkflowID,
+		Name: r.SignalName, RequestID: r.RequestID, Err: err})
+	return err
 }
 
 // TerminateWorkflow terminates the latest run on the owning node.
@@ -257,13 +317,32 @@ func (c *Cluster) DescribeWorkflow(ctx context.Context, workflowID string) (api.
 	return n.DescribeWorkflow(ctx, workflowID)
 }
 
-// GetHistory reads the latest run's history from the owning node.
+// GetHistory reads the latest run's history from the owning node, and records what it saw
+// for I2: a read is an observation, and every observation must be a prefix of the end state.
 func (c *Cluster) GetHistory(ctx context.Context, workflowID string) ([]history.Event, error) {
+	evs, err := c.readHistory(ctx, workflowID)
+	if err == nil {
+		c.observe(workflowID, "", "read", evs)
+	}
+	return evs, err
+}
+
+func (c *Cluster) readHistory(ctx context.Context, workflowID string) ([]history.Event, error) {
 	n, err := c.owner(workflowID)
 	if err != nil {
 		return nil, err
 	}
 	return n.GetHistory(ctx, workflowID)
+}
+
+// observe records one history snapshot. It copies nothing: the events are immutable once
+// written, which is the property I2 exists to check.
+func (c *Cluster) observe(workflowID, runID, source string, evs []history.Event) {
+	if c.rec == nil || len(evs) == 0 {
+		return
+	}
+	c.rec.Snapshots = append(c.rec.Snapshots, Snapshot{WorkflowID: workflowID, RunID: runID,
+		Source: source, At: c.rt.Now(), Events: evs})
 }
 
 func (c *Cluster) owner(workflowID string) (*server.Server, error) {

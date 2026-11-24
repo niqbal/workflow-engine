@@ -130,10 +130,15 @@ func TestWI040SameSeedByteIdenticalAndThirtyDayUnderFiveSeconds(t *testing.T) {
 		}
 	}
 
+	// Judging a run must not change it: the oracle records and checks, and the trace of a
+	// run with the full oracle must be the trace of the same seed without it.
 	hookedWL := wl
-	hookedWL.Oracle = struct{ Kind string }{"oracle"}
+	hookedWL.Oracle = sim.Invariants{}
 	hooked := sim.Run(seed, hookedWL, struct{ Kind string }{"faults"})
 	requireThirtyDay(t, hooked)
+	if hooked.Oracle != nil {
+		t.Fatalf("oracle: %v", hooked.Oracle)
+	}
 	if !bytes.Equal(want, traceBlob(hooked.Trace)) {
 		t.Fatalf("fault and oracle values changed the trace: %s", firstDiff(want, traceBlob(hooked.Trace)))
 	}
