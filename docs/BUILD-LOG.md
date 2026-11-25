@@ -401,3 +401,56 @@ and the factory needs a UI.
 - New items: WI-053 HTTP transport (human, can start now), WI-054 cluster config and
   `wfe server --config` (factory), WI-055 two-machine smoke test and runbook (factory), then an
   owner run on mini.
+
+## 2026-11-26 — Step 25: M3, the showcase, and most of M4
+
+Four milestones' worth of work, in the order the dependencies allowed. The record of what
+the simulator found is in `docs/SIM-BUGS.md`; this is what was built and what was decided.
+
+**M3, the simulation (WI-041 to WI-044).** The harness could run a cluster deterministically
+but had nothing to say about whether what it ran was correct. The oracle checks I1-I8 on
+every run and reports every violation, not the first. I6 reads a ghost log — every committed
+write with the fence it carried, recorded outside the store, with each shard's current epoch
+derived from the acquisitions in that log rather than read back from the shard row, so the
+check never trusts the state it judges. The fault injectors came next: node crash and
+restart, process pauses that outlast a lease, failed writes, ambiguous commits, commit delays
+that reorder the outbox, per-node clock skew, workers that die after a side effect, and later
+lost calls between nodes. Then five workloads and `wfe sim --seeds A-B`, which writes a
+failure report with the verdict, the fault set and the trace.
+
+It earned its keep immediately: a liveness bug in one seed in ten, where a store that commits
+a write and then reports it as failed left a shard's outbox undispatched. Isolating the
+faults one at a time narrowed a seven-fault interaction to one cause in minutes.
+
+**M6, the showcase (WI-070, WI-071).** `examples/agent` and a demo that kills the server and
+the worker while a run waits for a human, restarts both, approves with curl, and then kills
+the worker in the window between the money reaching the ledger and the report. One refund,
+after two kills and three workers. The agent is also a simulator workload, so the claim is
+checked by the oracle on every seed and not only by its own demo.
+
+**M4, leases and routing (WI-050, WI-051, WI-052).** `internal/shard` owns a node's shards:
+placement, renewal, and giving a shard up before its lease can expire. Two decisions worth
+recording. Placement takes anything free up to a node's even share but goes beyond it only
+for shards that have been *orphaned*, because claiming up to the cap from the start starves a
+peer that joins a minute later; the cost is that a cluster configured for more nodes than are
+running leaves the absent share unclaimed. And the stop-serving margin applies only while
+something renews the leases: a single node that owns every shard has no peer that could take
+anything, so a margin there would stop it serving and never bring it back.
+
+Then the frontend that answers for the whole cluster. The part that took the design work is
+that a task queue and the runs whose tasks pass through it are different things, owned by
+different shards and so possibly by different nodes: the run's owner hands the task to the
+node holding the queue, that node hands it to a worker, and starting it goes back to the run's
+owner because starting is a write to history. Every hop may fail and none has to succeed —
+the task stays in its shard's outbox and redispatch brings it back.
+
+`wfe sim --workload routed --seeds 1-2000` is clean: leases moving, nodes crashing and
+pausing, the store failing, calls between nodes lost, every client and worker call routed,
+all eight invariants checked.
+
+**What is left of M4.** WI-054, the cluster config, and WI-055, the two-machine smoke test.
+WI-054 as written refuses to start when `num_shards` disagrees with the store's, and the
+store has nowhere to keep that: there is no cluster row, and probing shard rows would create
+them. So it needs a store-interface change — a cluster record written when the cluster is
+created — which is hand-owned work and its own review, not something to bolt on at the end of
+a long session. The configuration and the smoke script come after it.
