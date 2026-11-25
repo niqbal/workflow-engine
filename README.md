@@ -63,7 +63,7 @@ the check that enforces it. In short:
 | G3 | **Deterministic progress.** Replaying a history reproduces exactly the recorded commands; workflow code runs effectively once however often it replays |
 | G4 | **Activities: at-least-once with a stable key.** `IdempotencyKey` is stable across attempts, so an idempotent sink applies the effect exactly once |
 | G5 | **Timers.** Fire at most once, never before `fireAt − ε` for a configured maximum clock skew, within a bounded delay once healthy |
-| G6 | **Single writer.** Per shard, writes from any node but the current owner are rejected, whatever the clocks say |
+| G6 | **Single writer.** Per shard, writes from any node but the current owner are rejected, whatever the clocks say. Leases decide only who *tries*: a node that cannot renew stops serving before its lease expires, and the fence is what makes being wrong about it harmless |
 | G7 | **Signals.** An acknowledged signal appears exactly once in history and is delivered before the run closes; retries with the same `requestID` return the original outcome |
 | G8 | **Liveness under quiet.** Once faults stop, every open run makes progress and every terminating workflow closes |
 
@@ -84,7 +84,8 @@ the store is down, and G5's lower bound if real skew exceeds ε.
 | **Cluster harness** ([`sim`](sim)) | N nodes, simulated workers, virtual clock and quiet phase; 20 runs of a seed produce byte-identical traces, and 30 days of virtual timers finish in under 5 s |
 | **The oracle** ([`sim/oracle.go`](sim/oracle.go)) | Invariants I1-I8 on every simulated run: runs close, history is append-only and never rewritten, replay reproduces the recorded commands, timers fire once and never early, each idempotency key is applied once, no write escapes its shard's fence, acknowledged signals appear exactly once, and results match a reference model derived from the same history |
 | **Fault injection** ([`sim/faults.go`](sim/faults.go)) | Node crash and restart, process pauses that outlast a lease, failed writes, ambiguous commits, commit delays that reorder the outbox, per-node clock skew, and workers that die after a side effect — all from the seed, all stopping at the quiet phase |
-| **Seed sweeps** (`wfe sim --seeds 1-200`) | Six workloads, including the agent showcase, under every fault at once. A failing seed is written to `sim/failures/<seed>.txt` with the verdict, the fault set and the trace |
+| **Cluster routing** ([`sim/network.go`](sim/network.go)) | Nodes on a simulated network: leases move shards, every client and worker call is forwarded to the owner, and calls or replies are lost in either direction. `--workload routed --seeds 1-2000` is clean |
+| **Seed sweeps** (`wfe sim --seeds 1-200`) | Seven workloads, including the agent showcase, under every fault at once. A failing seed is written to `sim/failures/<seed>.txt` with the verdict, the fault set and the trace |
 | **The showcase's own test** ([`examples/agent/agent_test.go`](examples/agent/agent_test.go)) | A worker is killed after the refund reaches the ledger and before it reports; the next worker finishes the run and the ledger still holds exactly one payment |
 | **Timestamp monotonicity, token signing, HTTP transport, metrics** | Covered by their own package tests |
 
@@ -232,8 +233,10 @@ refers to impossible to disagree.
 Built and green: the single-node engine end to end (M0–M2), durable Postgres storage, crash
 recovery, HTTP API and Go client, node-to-node HTTP transport, CLI, Prometheus metrics,
 signed task tokens, and the whole of M3 — the deterministic cluster harness, the oracle, the
-fault injectors, the workload mix and the seed sweep — and M6, the agent showcase with its
-demo. 35 of 41 work items are merged; ~27.5k lines of Go, of which more than half are tests.
+fault injectors, the workload mix and the seed sweep — M6, the agent showcase with its demo,
+and most of M4: shard leases with placement and a stop-serving margin, and a frontend that
+routes every call to the node that owns the shard or holds the task queue. 38 of 41 work
+items are merged; ~30k lines of Go, of which more than half are tests.
 
 Not built yet, and deliberately named rather than implied:
 
@@ -242,8 +245,10 @@ Not built yet, and deliberately named rather than implied:
   the observable equivalent of one partitioned from the store. Node-to-node HTTP exists
   (WI-053) but is not on the simulator's path, and the injectors for it belong with the
   routing work below.
-- **Sharding across nodes** (M4: request routing to the shard owner, task-queue routing).
-  Leases and fencing are implemented and tested; the routing layer above them is not.
+- **Running on two machines** (WI-054, WI-055): the cluster config file that gives a node
+  its peers and its shared key, and the smoke test across two hosts. Sharding, leases and
+  routing are built and tested in simulation; what is missing is the configuration that
+  points two real processes at each other, and a run on real hardware.
 - `GetVersion` (WI-060), shard leases and placement (WI-050), the one-million-timer
   benchmark, and everything in SPEC §1.2's non-goals.
 
