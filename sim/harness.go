@@ -37,6 +37,14 @@ type Workload struct {
 	Register   func(Registry) error
 	Run        func(ctx context.Context, c *Cluster) error
 
+	// Leases runs the nodes as a real cluster: each takes its share of the shards by lease
+	// and renews them, a node that cannot renew gives its shards up, and a dead node's
+	// shards are taken over (WI-050). Without it each node is pinned to a fixed set, which
+	// is what the earlier milestones' tests want.
+	Leases bool
+	// LeaseDuration is the shard lease when Leases is set. Zero means the server default.
+	LeaseDuration time.Duration
+
 	// Oracle checks the invariants after the quiet phase. Nil means Invariants{}: every
 	// check of SPEC §11.3. Use NoOracle for a workload that is deliberately not correct,
 	// such as one that leaves a run open on purpose.
@@ -67,6 +75,7 @@ type Cluster struct {
 	st     *memstore.Store
 	slots  []*node
 	shards int
+	leases bool
 	faults *Faults
 	oracle Oracle
 	rec    *Record
@@ -231,7 +240,13 @@ func (c *Cluster) boot(seed uint64, wl Workload) error {
 	c.shards = wl.Shards
 	key := tokenKey(seed)
 	ctx := context.Background()
-	cfg := server.Config{NumShards: wl.Shards, LongPoll: wl.LongPoll, TokenKey: key}
+	cfg := server.Config{NumShards: wl.Shards, LongPoll: wl.LongPoll, TokenKey: key,
+		LeaseDuration: wl.LeaseDuration}
+	if wl.Leases {
+		cfg.Nodes = wl.Nodes
+		cfg.FailoverAllowance = wl.Shards // a survivor may take everything
+	}
+	c.leases = wl.Leases
 	c.slots = make([]*node, wl.Nodes)
 	for i := 0; i < wl.Nodes; i++ {
 		c.slots[i] = &node{c: c, index: i, seed: seed, cfgBase: cfg,
@@ -322,37 +337,76 @@ func (c *Cluster) StartWorkflow(ctx context.Context, r api.StartRequest) (api.St
 // or it did not, and the request ID makes the retry safe either way (G1, SPEC §8.4).
 func (c *Cluster) StartRetrying(ctx context.Context, r api.StartRequest) (api.StartResponse, error) {
 	var last error
-	for attempt := 1; attempt <= clientAttempts; attempt++ {
+	deadline := c.rt.Now().Add(c.clientRetryWindow())
+	for attempt := 1; ; attempt++ {
 		resp, err := c.StartWorkflow(ctx, r)
 		if err == nil || !transientForClient(err) {
 			return resp, err
 		}
 		last = err
+		if !c.rt.Now().Before(deadline) {
+			return api.StartResponse{}, fmt.Errorf("sim: start %s gave up after %d attempts in %s: %w",
+				r.WorkflowID, attempt, c.clientRetryWindow(), last)
+		}
 		c.rt.Sleep(clientRetryDelay)
 	}
-	return api.StartResponse{}, fmt.Errorf("sim: start %s gave up after %d attempts: %w",
-		r.WorkflowID, clientAttempts, last)
 }
 
 // SignalRetrying signals a workflow, retrying a transient failure with the same request ID.
 // G7 makes the retry exactly-once in history however many times it is sent.
 func (c *Cluster) SignalRetrying(ctx context.Context, r api.SignalRequest) error {
 	var last error
-	for attempt := 1; attempt <= clientAttempts; attempt++ {
+	deadline := c.rt.Now().Add(c.clientRetryWindow())
+	for attempt := 1; ; attempt++ {
 		err := c.SignalWorkflow(ctx, r)
 		if err == nil || !transientForClient(err) {
 			return err
 		}
 		last = err
+		if !c.rt.Now().Before(deadline) {
+			return fmt.Errorf("sim: signal %s gave up after %d attempts in %s: %w",
+				r.WorkflowID, attempt, c.clientRetryWindow(), last)
+		}
 		c.rt.Sleep(clientRetryDelay)
 	}
-	return fmt.Errorf("sim: signal %s gave up after %d attempts: %w", r.WorkflowID, clientAttempts, last)
 }
 
-const (
-	clientAttempts   = 50
-	clientRetryDelay = 100 * time.Millisecond
-)
+// HistoryRetrying reads a run's history, retrying an unknown outcome the way a client must.
+// A read needs an owner too: the node that holds the shard is the one that can serve it.
+func (c *Cluster) HistoryRetrying(ctx context.Context, workflowID string) ([]history.Event, error) {
+	var last error
+	deadline := c.rt.Now().Add(c.clientRetryWindow())
+	for attempt := 1; ; attempt++ {
+		evs, err := c.GetHistory(ctx, workflowID)
+		if err == nil || !transientForClient(err) {
+			return evs, err
+		}
+		last = err
+		if !c.rt.Now().Before(deadline) {
+			return nil, fmt.Errorf("sim: history of %s gave up after %d attempts in %s: %w",
+				workflowID, attempt, c.clientRetryWindow(), last)
+		}
+		c.rt.Sleep(clientRetryDelay)
+	}
+}
+
+const clientRetryDelay = 100 * time.Millisecond
+
+// clientRetryWindow is how long a client keeps retrying an unknown outcome. It has to
+// outlast an ownership change, or a client gives up while the cluster is still deciding who
+// owns a shard: several lease durations, which is what a real client's deadline must allow
+// for too.
+func (c *Cluster) clientRetryWindow() time.Duration {
+	lease := 30 * time.Second
+	if len(c.slots) > 0 && c.slots[0].cfgBase.LeaseDuration > 0 {
+		lease = c.slots[0].cfgBase.LeaseDuration
+	}
+	window := 4 * lease
+	if window < 10*time.Second {
+		window = 10 * time.Second
+	}
+	return window
+}
 
 // transientForClient reports whether a client should retry. An injected store fault, an
 // ambiguous commit, a node that is down or a lost shard are all "unknown outcome, try
@@ -435,6 +489,9 @@ func (c *Cluster) owner(workflowID string) (*server.Server, error) {
 	if len(c.slots) == 0 {
 		return nil, fmt.Errorf("sim: cluster has no nodes")
 	}
+	if c.leases {
+		return c.leaseOwner(c.shardFor(workflowID))
+	}
 	n := c.slots[c.shardFor(workflowID)%len(c.slots)]
 	for {
 		if srv := n.server(); srv != nil {
@@ -449,6 +506,32 @@ func (c *Cluster) owner(workflowID string) (*server.Server, error) {
 
 // ShardFor maps a workflow ID to its shard, as the owning node would.
 func (c *Cluster) ShardFor(workflowID string) int { return c.shardFor(workflowID) }
+
+// leaseOwner finds the node that holds a shard by lease, waiting while ownership moves. It
+// stands in for the frontend's router (WI-051): in one process the owner can be asked
+// directly, where a real cluster forwards over the transport.
+func (c *Cluster) leaseOwner(shard int) (*server.Server, error) {
+	for attempt := 0; ; attempt++ {
+		for _, n := range c.slots {
+			srv := n.server()
+			if srv == nil {
+				continue
+			}
+			if _, ok := srv.ShardManager().Fence(shard); ok {
+				return srv, nil
+			}
+		}
+		if !c.rt.InTask() || attempt >= ownerAttempts {
+			return nil, fmt.Errorf("%w: shard %d has no owner that can serve it", errDown, shard)
+		}
+		c.rt.Sleep(ownerRetryDelay)
+	}
+}
+
+const (
+	ownerAttempts   = 2000
+	ownerRetryDelay = 50 * time.Millisecond
+)
 
 // shardFor maps a workflow ID to its shard exactly as server.ShardFor does. The cluster
 // needs the mapping to pick a node before it has a live server to ask, so the hash is

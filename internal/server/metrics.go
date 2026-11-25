@@ -47,10 +47,7 @@ func (s *Server) observeWriteMetrics(written []store.Task, done []store.TaskKey)
 }
 
 func (s *Server) refreshShardGaugeMetric() {
-	s.mu.Lock()
-	n := len(s.fences)
-	s.mu.Unlock()
-	s.metrics().SetShardsOwned(n)
+	s.metrics().SetShardsOwned(len(s.shards.Owned()))
 }
 
 func (s *Server) refreshPendingTimersMetric() {

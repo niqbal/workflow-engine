@@ -49,6 +49,7 @@ func Workloads() map[string]Builder {
 		"fanout":  Fanout,
 		"signals": Signals,
 		"agent":   Agent,
+		"leases":  Leases,
 	}
 }
 
@@ -327,6 +328,17 @@ func signalPayloadReference(name string) func(string, []history.Event) (json.Raw
 		}
 		return nil, fmt.Errorf("no %q signal in history", name)
 	}
+}
+
+// Leases is the basic workload run as a cluster that places shards by lease rather than
+// pinning them (WI-050): nodes take their share, renew it, give a shard up when they cannot,
+// and take over a dead node's shards once the lease lapses. The invariants do not change —
+// ownership moving must cost nothing — so it is the same workload with a different cluster.
+func Leases() Workload {
+	wl := Basic()
+	wl.Leases = true
+	wl.LeaseDuration = 10 * time.Second
+	return wl
 }
 
 // Agent is the showcase under the simulator (SPEC §11.4): the support agent of

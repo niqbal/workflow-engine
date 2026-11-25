@@ -126,7 +126,7 @@ func (s *Server) createRun(ctx context.Context, key store.RunKey, st *history.Mu
 	start := s.clk.Now()
 	written, err := s.st.CreateRun(ctx, f, store.NewRun{Key: key, Events: recs, State: state, Tasks: tasks})
 	if errors.Is(err, store.ErrFenced) {
-		s.metrics().IncErrFenced()
+		s.lostShard(key.Shard, err)
 	}
 	if err != nil {
 		return Written{}, storeErr(err)
@@ -194,7 +194,8 @@ func (s *Server) update(ctx context.Context, key store.RunKey, done []store.Task
 			continue
 		}
 		if errors.Is(err, store.ErrFenced) {
-			s.metrics().IncErrFenced()
+			// The shard moved while this write was in flight. Stop serving it.
+			s.lostShard(key.Shard, err)
 		}
 		if err != nil {
 			return Written{}, storeErr(err)

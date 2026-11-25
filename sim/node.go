@@ -61,9 +61,14 @@ func (n *node) start(ctx context.Context) error {
 	for attempt := 1; ; attempt++ {
 		srv := server.New(n.c.runtimeFor(n), n.c.storeFor(n),
 			rnd.New(split(n.seed, n.index*31+n.starts)), cfg)
-		err := srv.StartOwned(ctx, n.shards)
+		err := n.take(ctx, srv)
 		if err == nil {
 			if err = srv.Run(ctx); err == nil {
+				if n.c.leases {
+					if err = srv.RunShards(ctx); err != nil {
+						return fmt.Errorf("sim: node-%d shard loop: %w", n.index, err)
+					}
+				}
 				n.srv = srv
 				n.down = false
 				return nil
@@ -85,11 +90,21 @@ const (
 	startRetryDelay = 250 * time.Millisecond
 )
 
+// take gives the incarnation its shards: by lease when the cluster runs on leases, or pinned
+// to a fixed set otherwise.
+func (n *node) take(ctx context.Context, srv *server.Server) error {
+	if n.c.leases {
+		return srv.StartCluster(ctx)
+	}
+	return srv.StartOwned(ctx, n.shards)
+}
+
 // stop ends the incarnation's loops and drops what it held in memory, as a crash would.
 func (n *node) stop(ctx context.Context) {
 	if n.srv == nil {
 		return
 	}
+	n.srv.StopShards()
 	_ = n.srv.Stop(ctx)
 	n.srv.DropQueuedTasks()
 	n.down = true

@@ -152,6 +152,11 @@ func (c *Cluster) transient(err error, index int) bool {
 		return true
 	case errors.Is(err, api.ErrStaleTask), errors.Is(err, api.ErrNotFound):
 		return true
+	case errors.Is(err, api.ErrNotOwner):
+		// The node lost the shard between serving this task and hearing about it. A real
+		// cluster's frontend forwards the call to the new owner (WI-051); here the worker
+		// polls again, which reaches whoever owns it now.
+		return true
 	case errors.Is(err, context.Canceled):
 		// The incarnation's loops were stopped under this call.
 		return true

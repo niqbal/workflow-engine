@@ -23,6 +23,9 @@ type subsystems struct {
 	loops atomic.Pointer[loopSet]
 	// running background loops or nil (loops.go); atomic, not under mu
 
+	shardLoop atomic.Pointer[shardLoop]
+	// running shard placement loop or nil (cluster.go); atomic, not under mu
+
 	metrics atomic.Pointer[wfemetrics.Collector]
 	// per-server metrics collector (metrics.go); atomic, not under mu
 }

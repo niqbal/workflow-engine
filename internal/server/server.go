@@ -13,6 +13,7 @@ import (
 	"github.com/niqbal/workflow-engine/internal/clock"
 	"github.com/niqbal/workflow-engine/internal/rnd"
 	"github.com/niqbal/workflow-engine/internal/server/matching"
+	"github.com/niqbal/workflow-engine/internal/shard"
 	"github.com/niqbal/workflow-engine/internal/store"
 	"github.com/niqbal/workflow-engine/internal/xsync"
 )
@@ -24,7 +25,16 @@ type Config struct {
 	LongPoll           time.Duration // how long a poll waits on the server clock
 	RedispatchInterval time.Duration // re-push unstarted tasks (SPEC §8.2-8.3)
 	LeaseDuration      time.Duration
-	TokenKey           []byte // HMAC key for task tokens; cluster-wide
+	// LeaseMargin is how long before a lease expires the node stops serving the shard.
+	// Zero means a third of LeaseDuration (SPEC §9).
+	LeaseMargin time.Duration
+	// Nodes is how many nodes the cluster is configured with, which sets each node's even
+	// share of the shards. Zero or one means this node may own every shard.
+	Nodes int
+	// FailoverAllowance is how many shards beyond its even share a node may take over from
+	// a node whose lease has lapsed. Negative means a quarter of the even share.
+	FailoverAllowance int
+	TokenKey          []byte // HMAC key for task tokens; cluster-wide
 }
 
 func (c Config) withDefaults() Config {
@@ -54,9 +64,12 @@ type Server struct {
 	cfg   Config
 	match *matching.Matcher
 
-	mu     xsync.Locker
-	rand   rnd.Rand
-	fences map[int]store.Fence
+	mu   xsync.Locker
+	rand rnd.Rand
+	// shards is who owns what: the node's leases, their fences and the stop-serving
+	// margin (internal/shard, WI-050). It replaced a plain fence map, so there is one
+	// answer to "may I write to this shard" and the lease logic is testable on its own.
+	shards *shard.Manager
 
 	// sub holds per-subsystem state. Its type lives in subsystems.go, which work items may
 	// extend; this file stays hand-owned.
@@ -71,8 +84,17 @@ func New(rt xsync.Runtime, st store.Store, r rnd.Rand, cfg Config) *Server {
 	} else {
 		cfg.TokenKey = append([]byte(nil), cfg.TokenKey...)
 	}
-	return &Server{rt: rt, clk: rt.Clock(), st: st, cfg: cfg, match: matching.New(rt),
-		mu: rt.NewLocker(), rand: r, fences: map[int]store.Fence{}}
+	s := &Server{rt: rt, clk: rt.Clock(), st: st, cfg: cfg, match: matching.New(rt),
+		mu: rt.NewLocker(), rand: r}
+	s.shards = shard.New(rt, st, shard.Config{
+		Node:              cfg.Node,
+		NumShards:         cfg.NumShards,
+		Nodes:             cfg.Nodes,
+		Lease:             cfg.LeaseDuration,
+		Margin:            cfg.LeaseMargin,
+		FailoverAllowance: cfg.FailoverAllowance,
+	})
+	return s
 }
 
 func generatedTokenKey(r rnd.Rand) []byte {
@@ -86,16 +108,13 @@ func generatedTokenKey(r rnd.Rand) []byte {
 	return key
 }
 
-// Start acquires every shard (single-node M1; M4 replaces this with leases and placement).
+// Start acquires every shard, which is the single-node case. A cluster calls StartCluster
+// instead and lets placement decide (WI-050).
 func (s *Server) Start(ctx context.Context) error {
 	for shard := 0; shard < s.cfg.NumShards; shard++ {
-		f, err := s.st.AcquireShard(ctx, shard, s.cfg.Node, s.clk.Now(), s.cfg.LeaseDuration)
-		if err != nil {
-			return fmt.Errorf("server: acquire shard %d: %w", shard, err)
+		if _, err := s.shards.Acquire(ctx, shard); err != nil {
+			return fmt.Errorf("server: %w", err)
 		}
-		s.mu.Lock()
-		s.fences[shard] = f
-		s.mu.Unlock()
 	}
 	s.refreshShardGaugeMetric()
 	s.refreshPendingTimersMetric()
@@ -119,18 +138,14 @@ func (s *Server) ShardFor(workflowID string) int {
 }
 
 func (s *Server) fence(shard int) (store.Fence, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	f, ok := s.fences[shard]
-	return f, ok
+	return s.shards.Fence(shard)
 }
 
-// Shards lists owned shards in order.
-func (s *Server) Shards() []int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return xsync.SortedKeys(s.fences)
-}
+// Shards lists the shards this node owns and may still serve, in order.
+func (s *Server) Shards() []int { return s.shards.Owned() }
+
+// ShardManager exposes ownership for routing and for the cluster loop.
+func (s *Server) ShardManager() *shard.Manager { return s.shards }
 
 func (s *Server) newRunID() string {
 	s.mu.Lock()

@@ -102,7 +102,22 @@ func (ls *loopSet) exited() {
 // until Stop, or until ctx is done. Under simulation, pass a context that is never canceled
 // asynchronously and end the loops with Stop.
 func (s *Server) Run(ctx context.Context) error {
+	// In a cluster, loops run for every shard rather than only the ones owned right now:
+	// ownership moves under them as leases change hands (WI-050), and a loop whose shard is
+	// not owned waits instead of scanning. Starting them all once is simpler and cheaper
+	// than adding and removing loops as shards come and go.
+	//
+	// A single node, or a layout pinned by StartOwned, keeps a loop per owned shard. There
+	// ownership cannot move on its own, so a loop for someone else's shard would only poll
+	// to find nothing — on a workload whose timers span a month, hundreds of thousands of
+	// times.
 	shards := s.Shards()
+	if s.cfg.Nodes > 1 {
+		shards = make([]int, 0, s.cfg.NumShards)
+		for shard := 0; shard < s.cfg.NumShards; shard++ {
+			shards = append(shards, shard)
+		}
+	}
 	lctx, cancel := context.WithCancel(ctx)
 	l := s.rt.NewLocker()
 	ls := &loopSet{cancel: cancel, transfer: map[int]*wakeup{}, timers: map[int]*wakeup{},
@@ -159,6 +174,12 @@ func (s *Server) transferLoop(ctx context.Context, ls *loopSet, shard int) {
 	defer ls.exited()
 	w := ls.transfer[shard]
 	for {
+		if _, owned := s.fence(shard); !owned {
+			if !w.wait(s.unownedWait()) {
+				return
+			}
+			continue
+		}
 		var next time.Time
 		if _, err := s.processTransfer(ctx, shard); err != nil {
 			next = s.clk.Now().Add(loopRetryDelay)
@@ -192,6 +213,12 @@ func (s *Server) timerLoop(ctx context.Context, ls *loopSet, shard int) {
 	defer ls.exited()
 	w := ls.timers[shard]
 	for {
+		if _, owned := s.fence(shard); !owned {
+			if !w.wait(s.unownedWait()) {
+				return
+			}
+			continue
+		}
 		var next time.Time
 		_, err := s.processTimers(ctx, shard)
 		earliest, rerr := s.st.ReadTimerTasks(ctx, shard, farFuture, 1)
@@ -254,6 +281,29 @@ func (s *Server) updateAndWake(ctx context.Context, key store.RunKey, done []sto
 	}
 	s.wakeUncertain(key.Shard, err)
 	return w, err
+}
+
+// ownershipPoll is how long a loop waits before looking again at a shard this node does not
+// own. A shard loop that acquires the shard rings the loop, so this is only a backstop.
+func (s *Server) ownershipPoll() time.Duration {
+	if !s.shards.Renewing() {
+		return 0 // nothing can give this node the shard but an explicit acquire, which rings
+	}
+	d := s.shards.Config().Interval()
+	if d <= 0 {
+		d = s.cfg.LeaseDuration
+	}
+	return d
+}
+
+// unownedWait is when a loop should look at an unowned shard again: the next placement
+// interval in a cluster, or never (a bare wake) when ownership cannot move on its own.
+func (s *Server) unownedWait() time.Time {
+	d := s.ownershipPoll()
+	if d <= 0 {
+		return time.Time{}
+	}
+	return s.clk.Now().Add(d)
 }
 
 // wakeUncertain rings a shard's loops after a write that may have committed anyway.
