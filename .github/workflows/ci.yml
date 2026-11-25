@@ -60,7 +60,7 @@ jobs:
           exit $status
 
   postgres:
-    name: store contract suite on Postgres
+    name: store and cluster suites on Postgres
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -80,7 +80,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # The suite creates and drops its own schema per test; it skips without PG_URL.
-      - run: go test -count=1 -v ./internal/store/pgstore/...
+      # Both suites create and drop their own schema per test, and skip without PG_URL.
+      # cmd/wfe is in here because a cluster of two nodes needs a shared store (WI-054).
+      - run: go test -count=1 -v ./internal/store/pgstore/... ./cmd/wfe/...
         env:
           PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable

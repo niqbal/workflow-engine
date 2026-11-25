@@ -18,7 +18,17 @@ var (
 	ErrNotFound      = errors.New("store: not found")
 	ErrAlreadyExists = errors.New("store: already exists")
 	ErrInvalid       = errors.New("store: invalid write")
+	// ErrClusterMismatch means the cluster was created with a different shard count.
+	// NumShards is fixed for a cluster's life (SPEC §9), so a node configured with another
+	// value would route by a different mapping and write to shards nobody owns.
+	ErrClusterMismatch = errors.New("store: cluster shard count does not match")
 )
+
+// ClusterInfo is what a cluster fixes when it is created and can never change.
+type ClusterInfo struct {
+	NumShards int       `json:"numShards"`
+	CreatedAt time.Time `json:"createdAt"`
+}
 
 // Fence is a shard ownership epoch. Writes carrying a fence whose RangeID is no longer the
 // shard's current one fail with ErrFenced.
@@ -137,4 +147,14 @@ type Store interface {
 	ReadTimerTasks(ctx context.Context, shard int, upTo time.Time, limit int) ([]Task, error)
 	// DeleteTasks removes tasks if f is current, else ErrFenced. Missing keys are ignored.
 	DeleteTasks(ctx context.Context, f Fence, keys []TaskKey) error
+
+	// EnsureCluster records numShards and now for a store that holds no cluster yet, and
+	// returns what the store holds either way. It never changes a recorded value: a
+	// different numShards is ErrClusterMismatch, with the recorded ClusterInfo returned
+	// alongside so a node can say what it disagreed with.
+	//
+	// Every node calls this before it serves anything. It is the one piece of the cluster's
+	// configuration that cannot be taken on trust from a config file, because getting it
+	// wrong on one node routes that node's writes to shards by a mapping nobody else uses.
+	EnsureCluster(ctx context.Context, numShards int, now time.Time) (ClusterInfo, error)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/niqbal/workflow-engine/activity"
 	"github.com/niqbal/workflow-engine/internal/engine"
@@ -19,6 +20,18 @@ import (
 type Options struct {
 	TaskQueue string
 	Identity  string
+
+	// RetryDelay is how long the worker waits before polling again after a failed call.
+	// Zero means one second.
+	//
+	// A worker does not stop because a call failed. In a cluster, polling is forwarded to
+	// whichever node holds the task queue, and that node can be restarting, have just lost
+	// the shard, or drop the connection of a long poll it was serving: all of it ordinary,
+	// none of it a reason to stop processing work. Only a cancelled context ends Run.
+	RetryDelay time.Duration
+	// OnError, when set, is called with every error the worker retries. Without it a worker
+	// that cannot reach its server is silent, which is worse than noisy.
+	OnError func(error)
 }
 
 // Worker polls workflow and activity tasks, executes them, and reports results.
@@ -129,17 +142,44 @@ func (w *Worker) workflowLoop(ctx context.Context) error {
 		}
 		task, err := w.svc.PollWorkflowTask(ctx, poll)
 		if err != nil {
-			if ctx.Err() != nil {
+			if !w.backoff(ctx, err) {
 				return nil
 			}
-			return err
+			continue
 		}
 		if task == nil {
 			continue
 		}
 		if err := w.handleWorkflowTask(ctx, task); err != nil {
-			return err
+			// The task is not lost: the server redispatches one whose outcome it never
+			// heard, so retrying the poll is the whole of the recovery.
+			if !w.backoff(ctx, err) {
+				return nil
+			}
 		}
+	}
+}
+
+// backoff reports the error and waits before the next attempt. It returns false when the
+// context is done, which is the only thing that ends a worker.
+func (w *Worker) backoff(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if w.opts.OnError != nil {
+		w.opts.OnError(err)
+	}
+	delay := w.opts.RetryDelay
+	if delay <= 0 {
+		delay = time.Second
+	}
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 
@@ -151,16 +191,18 @@ func (w *Worker) activityLoop(ctx context.Context) error {
 		}
 		task, err := w.svc.PollActivityTask(ctx, poll)
 		if err != nil {
-			if ctx.Err() != nil {
+			if !w.backoff(ctx, err) {
 				return nil
 			}
-			return err
+			continue
 		}
 		if task == nil {
 			continue
 		}
 		if err := w.handleActivityTask(ctx, task); err != nil {
-			return err
+			if !w.backoff(ctx, err) {
+				return nil
+			}
 		}
 	}
 }

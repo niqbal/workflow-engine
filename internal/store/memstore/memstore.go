@@ -80,11 +80,12 @@ type Store struct {
 	mu     xsync.Locker
 	delay  xsync.Cond // never signalled; commit delays wait on it with a deadline
 
-	shards map[int]*store.ShardInfo
-	runs   map[store.RunKey]*run
-	latest map[workflowKey]store.RunKey
-	tasks  map[queueKey]map[int64]store.Task
-	nextID map[queueKey]int64
+	cluster *store.ClusterInfo
+	shards  map[int]*store.ShardInfo
+	runs    map[store.RunKey]*run
+	latest  map[workflowKey]store.RunKey
+	tasks   map[queueKey]map[int64]store.Task
+	nextID  map[queueKey]int64
 }
 
 var _ store.Store = (*Store)(nil)
@@ -239,6 +240,26 @@ func (s *Store) deleteTasks(keys []store.TaskKey) {
 }
 
 // GetShard returns the shard row, creating an unowned row if absent.
+// EnsureCluster records the shard count once, and compares every time after that.
+func (s *Store) EnsureCluster(ctx context.Context, numShards int, now time.Time) (store.ClusterInfo, error) {
+	s.enter()
+	if numShards <= 0 {
+		return store.ClusterInfo{}, fmt.Errorf("%w: num_shards must be positive, got %d",
+			store.ErrInvalid, numShards)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cluster == nil {
+		s.cluster = &store.ClusterInfo{NumShards: numShards, CreatedAt: now.UTC()}
+	}
+	info := *s.cluster
+	if info.NumShards != numShards {
+		return info, fmt.Errorf("%w: the cluster was created with %d shards, this node is configured for %d",
+			store.ErrClusterMismatch, info.NumShards, numShards)
+	}
+	return info, nil
+}
+
 func (s *Store) GetShard(ctx context.Context, shard int) (store.ShardInfo, error) {
 	s.enter()
 	s.mu.Lock()

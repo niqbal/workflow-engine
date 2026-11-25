@@ -95,8 +95,15 @@ func runWorker(args []string, stdout, stderr io.Writer) error {
 
 	w := worker.New(client.New(*addr, client.Options{}), worker.Options{
 		TaskQueue: *queue, Identity: *identity,
+		// A worker keeps working through a cluster's hiccups, and says what it saw.
+		OnError: func(err error) { fmt.Fprintf(stderr, "retrying: %v\n", err) },
 	})
 	if err := acts.Register(w); err != nil {
+		return err
+	}
+	// The smoke workflow needs no human, which is what an unattended script needs
+	// (scripts/cluster-smoke.sh).
+	if err := agent.RegisterSmoke(w); err != nil {
 		return err
 	}
 

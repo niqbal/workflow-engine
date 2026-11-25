@@ -44,9 +44,16 @@ type Config struct {
 	// Margin is how long before expiry a shard is dropped when it has not been renewed.
 	// Zero means a third of the lease.
 	Margin time.Duration
-	// FailoverAllowance is how many shards beyond the even share this node may take, so a
-	// dead node's shards are picked up. Negative means a quarter of the even share, at least
-	// one.
+	// FailoverAllowance is how many shards beyond its even share this node may take over
+	// from nodes whose leases have lapsed. Zero, the default, means no limit: a node takes
+	// over every orphaned shard it finds.
+	//
+	// No limit is the right default and the smoke test is why. A two-node cluster gives
+	// each node an even share of half; cap a node at its share and the survivor of a
+	// failover can take nothing, so half the shards stay unowned and the runs on them stop
+	// — the exact failure the cluster exists to avoid. The even share already bounds
+	// greedy claiming of *free* shards, which is what keeps a node from starving its peers;
+	// failover is a different thing and wants a different bound.
 	FailoverAllowance int
 	// Renewing says that something is renewing these leases — a cluster's shard loop. Only
 	// then does the stop-serving margin apply: a shard that has not been renewed within it
@@ -75,12 +82,8 @@ func (c Config) withDefaults() Config {
 	if c.Margin >= c.Lease {
 		c.Margin = c.Lease / 2
 	}
-	if c.FailoverAllowance < 0 {
-		share := c.evenShare()
-		c.FailoverAllowance = share / 4
-		if c.FailoverAllowance < 1 {
-			c.FailoverAllowance = 1
-		}
+	if c.FailoverAllowance <= 0 {
+		c.FailoverAllowance = c.NumShards // no limit: take over whatever is orphaned
 	}
 	return c
 }

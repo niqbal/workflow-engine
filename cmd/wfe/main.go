@@ -82,6 +82,7 @@ func runServer(args []string, stdout, stderr io.Writer) error {
 	redispatch := fs.Duration("redispatch-interval", 30*time.Second, "task redispatch interval")
 	lease := fs.Duration("lease-duration", 30*time.Second, "shard lease duration")
 	seed := fs.Uint64("seed", 1, "deterministic run ID seed")
+	configPath := fs.String("config", "", "cluster config file (wfe.yaml); see the fields below")
 	storeURL := fs.String("store", "", "Postgres URL; empty uses the in-memory store, which a restart loses")
 	tokenKey := fs.String("token-key", "", "HMAC key for task tokens; must match across restarts and nodes")
 	fs.Usage = func() {
@@ -91,8 +92,15 @@ func runServer(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "Run one server node. Without --store it keeps everything in memory,")
 		fmt.Fprintln(stderr, "so a restart starts empty; with --store it survives one.")
 		fmt.Fprintln(stderr)
+		fmt.Fprintln(stderr, "With --config it runs as one node of a cluster: it takes its share of the")
+		fmt.Fprintln(stderr, "shards by lease, renews them, takes over a dead node's shards, and forwards")
+		fmt.Fprintln(stderr, "any request it cannot serve to the node that can. The other flags are")
+		fmt.Fprintln(stderr, "ignored, because the file carries all of it.")
+		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Flags:")
 		fs.PrintDefaults()
+		fmt.Fprintln(stderr)
+		printConfigHelp(stderr)
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -108,6 +116,10 @@ func runServer(args []string, stdout, stderr io.Writer) error {
 	defer stop()
 
 	rt := xsync.NewReal(ctx)
+	if *configPath != "" {
+		return runClusterServer(ctx, *configPath, stdout, stderr)
+	}
+
 	var st store.Store
 	if *storeURL == "" {
 		st = memstore.New(memstore.WithRuntime(rt))

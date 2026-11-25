@@ -251,7 +251,6 @@ func (c *Cluster) boot(seed uint64, wl Workload) error {
 		LeaseDuration: wl.LeaseDuration}
 	if wl.Leases {
 		cfg.Nodes = wl.Nodes
-		cfg.FailoverAllowance = wl.Shards // a survivor may take everything
 	}
 	c.leases = wl.Leases
 	c.routing = wl.Routing

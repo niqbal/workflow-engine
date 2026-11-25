@@ -43,6 +43,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"TimerTasksOrdered", testTimerTasks},
 		{"DoneTasksDeletedAtomically", testDoneTasks},
 		{"ConcurrentWritersOneWinsPerVersion", testConcurrentWriters},
+		{"ClusterShardCountIsFixedOnce", testClusterConfig},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.fn(t, newStore(t)) })
@@ -380,5 +381,53 @@ func testConcurrentWriters(t *testing.T, s store.Store) {
 	snap := must(s.GetRun(ctx, k))(t)
 	if snap.DBVersion != 2 || string(snap.State) != fmt.Sprintf("w%d", winners[0]) {
 		t.Fatalf("state does not match the winner: %+v", snap)
+	}
+}
+
+// testClusterConfig: the cluster's shard count is written once and never changes. A node
+// configured for another count has to be refused, because the shard of a workflow ID is
+// hash(id) mod the count, and two nodes with different counts would own shards holding each
+// other's runs.
+func testClusterConfig(t *testing.T, s store.Store) {
+	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	info, err := s.EnsureCluster(ctx, 16, now)
+	if err != nil {
+		t.Fatalf("first EnsureCluster: %v", err)
+	}
+	if info.NumShards != 16 {
+		t.Fatalf("recorded %d shards, want 16", info.NumShards)
+	}
+	if info.CreatedAt.IsZero() {
+		t.Error("the cluster record has no creation time")
+	}
+
+	// The same count again is fine, and does not move the creation time.
+	again, err := s.EnsureCluster(ctx, 16, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("second EnsureCluster: %v", err)
+	}
+	if !again.CreatedAt.Equal(info.CreatedAt) {
+		t.Errorf("creation time moved from %s to %s", info.CreatedAt, again.CreatedAt)
+	}
+
+	// A different count is refused, and the error carries what the store holds so the node
+	// can say what it disagreed with.
+	got, err := s.EnsureCluster(ctx, 32, now.Add(2*time.Hour))
+	if !errors.Is(err, store.ErrClusterMismatch) {
+		t.Fatalf("mismatched count returned %v, want ErrClusterMismatch", err)
+	}
+	if got.NumShards != 16 {
+		t.Errorf("the refusal reported %d shards, want the recorded 16", got.NumShards)
+	}
+
+	// And the refusal changed nothing.
+	after, err := s.EnsureCluster(ctx, 16, now)
+	if err != nil || after.NumShards != 16 {
+		t.Fatalf("after a refusal: %+v, %v", after, err)
+	}
+
+	// A count that is not a count is invalid, not a mismatch.
+	if _, err := s.EnsureCluster(ctx, 0, now); !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("zero shards returned %v, want ErrInvalid", err)
 	}
 }

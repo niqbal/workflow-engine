@@ -2,6 +2,7 @@ package pgstore_test
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -38,8 +39,10 @@ func TestTesterMigrateRefusesNewerDatabase(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM `+schema+`.schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Fatalf("refused Migrate changed schema_migrations: %d rows", n)
+	// The refused Migrate must not have applied or removed anything: one row per embedded
+	// migration, plus the planted future one.
+	if want := migrationCount(t) + 1; n != want {
+		t.Fatalf("refused Migrate changed schema_migrations: %d rows, want %d", n, want)
 	}
 }
 
@@ -85,4 +88,15 @@ func TestTesterMigrateStaysInSchema(t *testing.T) {
 	if after := countOutside(a, b); after != before {
 		t.Fatalf("migration leaked outside its schema: %d -> %d", before, after)
 	}
+}
+
+// migrationCount is how many migrations this build embeds, counted from the files so adding
+// one does not need a number changed here.
+func migrationCount(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
 }

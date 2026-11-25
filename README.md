@@ -122,6 +122,12 @@ Sweep seeds through the simulator, with every fault injected and every invariant
 go run ./cmd/wfe sim --seeds 1-200 --workload basic
 ```
 
+Run a cluster of two nodes over one Postgres, kill one of them, and check what survived:
+
+```bash
+PG_URL='postgres://localhost:5432/postgres?sslmode=disable' scripts/cluster-smoke.sh
+```
+
 The Postgres suite is skipped unless you point it at a database:
 
 ```bash
@@ -214,7 +220,9 @@ cmd/wfe/       CLI: server, workflow start/signal/history
 internal/
   history/     Event types and the state machine that validates every transition
   engine/      Replay: drives workflow code forward from a history, collects commands
-  server/      Shard ownership, task dispatch, timers, recovery, signed task tokens
+  server/      Task dispatch, timers, recovery, signed task tokens, the cluster router
+  shard/       Shard ownership: leases, placement, the stop-serving margin
+  cluster/     wfe.yaml: a node's name, peers, store and key, and every refusal
   store/       Store interface; memstore and pgstore implementations, one contract suite
   transport/   Node-to-node HTTP
   clock,rnd,xsync,simrt/  The seams that make the engine simulatable
@@ -224,7 +232,10 @@ sim/           Deterministic cluster harness
 
 A run's state lives in one shard, `hash(workflowID) mod NumShards`. Each shard has an
 ownership epoch (a fence); every write is conditional on it, so a paused node that wakes up
-believing it still owns a shard cannot write. Events and the mutable state summary commit in
+believing it still owns a shard cannot write. A task queue lives on the owner of
+`hash(queue)`, which is usually a different node from the run's, so a task is handed to the
+queue's owner, served to a worker from there, and started back on the run's owner — any hop
+may fail, and the shard's outbox plus redispatch is what makes that safe. Events and the mutable state summary commit in
 one transaction together with an outbox record, which is what makes a task and the history it
 refers to impossible to disagree.
 
@@ -245,10 +256,9 @@ Not built yet, and deliberately named rather than implied:
   the observable equivalent of one partitioned from the store. Node-to-node HTTP exists
   (WI-053) but is not on the simulator's path, and the injectors for it belong with the
   routing work below.
-- **Running on two machines** (WI-054, WI-055): the cluster config file that gives a node
-  its peers and its shared key, and the smoke test across two hosts. Sharding, leases and
-  routing are built and tested in simulation; what is missing is the configuration that
-  points two real processes at each other, and a run on real hardware.
+- **A run on two real machines.** The cluster config, the smoke test and the runbook are
+  built and the smoke test passes with two nodes on one host; the laptop-and-mini run the
+  design was written for has not happened yet.
 - `GetVersion` (WI-060), shard leases and placement (WI-050), the one-million-timer
   benchmark, and everything in SPEC §1.2's non-goals.
 
@@ -280,6 +290,7 @@ work items.
 | [docs/WORK-ITEMS.md](docs/WORK-ITEMS.md) | The spec cut into work items with acceptance criteria |
 | [docs/BUILD-LOG.md](docs/BUILD-LOG.md) | Every step taken, in order, with decisions and their reasons |
 | [docs/MULTI-MACHINE.md](docs/MULTI-MACHINE.md) | Design for a cluster across machines |
+| [docs/RUNNING-A-CLUSTER.md](docs/RUNNING-A-CLUSTER.md) | Running one: config, ports, clocks, what a failover looks like |
 | [docs/SIM-BUGS.md](docs/SIM-BUGS.md) | Every bug the simulator found: seed, mechanism, fix |
 | [docs/REVIEWING.md](docs/REVIEWING.md) | How factory jobs are reviewed and steered |
 | [AGENTS.md](AGENTS.md) | The rules agents work under |

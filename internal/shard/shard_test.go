@@ -58,9 +58,10 @@ func TestPlacementSplitsTheClusterAndRespectsTheCap(t *testing.T) {
 	a := f.manager("node-a", 2)
 	b := f.manager("node-b", 2)
 
-	// Even share of 8 across 2 nodes is 4, plus a failover allowance of 0 by default.
-	if got := a.Config().Cap(); got != 4 {
-		t.Fatalf("cap %d, want 4", got)
+	// Even share of 8 across 2 nodes is 4; the cap allows taking over everything, because a
+	// survivor that may not exceed its share cannot fail over at all.
+	if got := a.Config().Cap(); got != shards {
+		t.Fatalf("cap %d, want %d", got, shards)
 	}
 
 	if _, err := a.Tick(ctx); err != nil {
@@ -102,8 +103,7 @@ func TestPlacementSplitsTheClusterAndRespectsTheCap(t *testing.T) {
 
 func TestFailoverTakesADeadNodesShardsOnceTheLeaseLapses(t *testing.T) {
 	f := newFixture(t)
-	// One failover allowance per node, so a survivor can take more than its even share.
-	cfg := shard.Config{Node: "node-a", NumShards: 4, Nodes: 2, Lease: lease, FailoverAllowance: 2}
+	cfg := shard.Config{Node: "node-a", NumShards: 4, Nodes: 2, Lease: lease}
 	a := shard.New(f.rt, f.st, cfg)
 	cfg.Node = "node-b"
 	b := shard.New(f.rt, f.st, cfg)
@@ -264,8 +264,7 @@ func TestOwnerLookupAndItsCache(t *testing.T) {
 
 func TestConfigDefaults(t *testing.T) {
 	f := newFixture(t)
-	m := shard.New(f.rt, f.st, shard.Config{Node: "n", NumShards: 64, Nodes: 4,
-		FailoverAllowance: -1})
+	m := shard.New(f.rt, f.st, shard.Config{Node: "n", NumShards: 64, Nodes: 4})
 	cfg := m.Config()
 	if cfg.Lease != 30*time.Second {
 		t.Errorf("lease %s", cfg.Lease)
@@ -273,9 +272,15 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.Margin != 10*time.Second {
 		t.Errorf("margin %s, want a third of the lease", cfg.Margin)
 	}
-	// Even share 16, allowance a quarter of it.
-	if cfg.FailoverAllowance != 4 || cfg.Cap() != 20 {
-		t.Errorf("allowance %d, cap %d, want 4 and 20", cfg.FailoverAllowance, cfg.Cap())
+	// An unset allowance is no limit: a survivor may end up holding the cluster.
+	if cfg.FailoverAllowance != 64 || cfg.Cap() != 64 {
+		t.Errorf("allowance %d, cap %d, want no limit", cfg.FailoverAllowance, cfg.Cap())
+	}
+	// An explicit allowance is respected, for an operator who wants a node bounded.
+	bounded := shard.New(f.rt, f.st, shard.Config{Node: "n", NumShards: 64, Nodes: 4,
+		FailoverAllowance: 4}).Config()
+	if bounded.Cap() != 20 {
+		t.Errorf("bounded cap %d, want 20 (even share 16 plus 4)", bounded.Cap())
 	}
 	if got := cfg.Interval(); got != 5*time.Second {
 		t.Errorf("interval %s, want half the margin", got)

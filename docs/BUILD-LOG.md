@@ -454,3 +454,48 @@ store has nowhere to keep that: there is no cluster row, and probing shard rows 
 them. So it needs a store-interface change — a cluster record written when the cluster is
 created — which is hand-owned work and its own review, not something to bolt on at the end of
 a long session. The configuration and the smoke script come after it.
+
+## 2026-11-26 — Step 26: the rest of M4, and what the smoke test found
+
+**The cluster record (store).** WI-054 refuses to start when `num_shards` disagrees with the
+store's, and the store had nowhere to keep that. `EnsureCluster` writes it once — one row,
+`CHECK (id = 1)` — and compares every time after. It is the one piece of a cluster's
+configuration that cannot be taken on trust from a file: a node that disagrees routes by a
+different mapping and writes to shards holding other runs' history. The store contract suite
+gained a case for it, so both stores are held to it.
+
+**The config (WI-054).** `internal/cluster` reads `wfe.yaml` and mostly refuses it. Every
+check is a mistake that would otherwise look like missing work rather than an error: a node
+absent from its own peer list, an in-memory store with peers, a missing or short cluster key,
+one port for both listeners, a lease shorter than the configured clock skew. Secrets are named
+rather than written: the file carries `url_env` and `cluster_key_env`. `wfe server --config`
+then runs the node as a cluster member — leases, routing, two listeners — and `--help`
+documents the fields.
+
+**The smoke test (WI-055) and the bug it found.** `scripts/cluster-smoke.sh` starts two nodes
+over one Postgres, runs workflows through one while a worker polls the other, `kill -9`s
+whichever owns more shards, and checks four things. The first run showed both nodes placing
+eight shards each and then *no* run completing after the kill.
+
+The cause was placement's cap. A node's cap was its even share plus a failover allowance that
+defaulted to zero — so in a two-node cluster each node was capped at exactly its half, and the
+survivor of a failover could take nothing. Half the shards stayed unowned and their runs
+stopped: the precise failure the cluster exists to avoid. The simulator had not caught it
+because its lease tests set an explicit allowance, which is a lesson about defaults: the
+configuration a test chooses is not the configuration an operator gets.
+
+An unset allowance now means no limit. The even share still bounds greedy claiming of *free*
+shards, which is what keeps a node from starving a peer that starts a minute later; failover
+is a different thing and wants a different bound.
+
+Three smaller things the same script exposed: a node's `/metrics` served the process-default
+collector rather than the server's own, so `wfe_shards_owned` always read zero; the script's
+own `start_node` ran in a command substitution, which left the parent with no pid to kill and
+orphaned nodes holding ports between runs; and every `curl` needed a deadline, because a
+request the frontend is holding across an ownership change will block a script that never
+asked for a timeout.
+
+**The runbook.** `docs/RUNNING-A-CLUSTER.md`: cross-building for the second Mac, Postgres in
+Docker, the macOS firewall prompt, clock sync and what skew costs (timing, not safety), which
+metrics to watch, and what a failover looks like from outside. The two-machine run on
+mini.local is the owner's to do; everything it needs is in there.

@@ -10,7 +10,10 @@ import (
 	"github.com/niqbal/workflow-engine/internal/store/pgstore"
 )
 
-var tables = []string{"shards", "runs", "history", "task_counters", "transfer_tasks", "timer_tasks", "schema_migrations"}
+// tables is every table the migrations create, so a new migration updates this list and the
+// counts that use it rather than a literal somewhere.
+var tables = []string{"shards", "runs", "history", "task_counters", "transfer_tasks",
+	"timer_tasks", "cluster", "schema_migrations"}
 
 // Migrations apply to an empty schema, and applying them again (from a second store too)
 // changes nothing.
@@ -56,8 +59,10 @@ func TestMigrateEmptyDatabaseAndIdempotent(t *testing.T) {
 		if err := conn.QueryRow(ctx, `SELECT count(*), count(DISTINCT version) FROM `+schema+`.schema_migrations`).Scan(&applied, &distinct); err != nil {
 			t.Fatal(err)
 		}
-		if applied != 1 || distinct != 1 {
-			t.Fatalf("after migrate #%d: want one applied migration, got %d (%d distinct)", i+1, applied, distinct)
+		// One row per embedded migration, however many times Migrate runs.
+		if want := migrationCount(t); applied != want || distinct != want {
+			t.Fatalf("after migrate #%d: want %d applied migrations, got %d (%d distinct)",
+				i+1, want, applied, distinct)
 		}
 	}
 	for _, name := range tables {

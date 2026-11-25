@@ -255,6 +255,33 @@ func scanShard(row pgx.Row) (store.ShardInfo, error) {
 const ensureShard = `INSERT INTO shards (shard_id) VALUES ($1) ON CONFLICT (shard_id) DO NOTHING`
 
 // GetShard returns the shard row, creating an unowned row if absent.
+// EnsureCluster writes the cluster row if the store has none, and compares otherwise.
+func (s *Store) EnsureCluster(ctx context.Context, numShards int, now time.Time) (store.ClusterInfo, error) {
+	s.enter()
+	if numShards <= 0 {
+		return store.ClusterInfo{}, fmt.Errorf("%w: num_shards must be positive, got %d",
+			store.ErrInvalid, numShards)
+	}
+	var info store.ClusterInfo
+	err := s.tx(ctx, "EnsureCluster", func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO cluster (id, num_shards, created_at) VALUES (1, $1, $2)
+			 ON CONFLICT (id) DO NOTHING`, numShards, now.UTC()); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT num_shards, created_at FROM cluster WHERE id = 1`).
+			Scan(&info.NumShards, &info.CreatedAt)
+	})
+	if err != nil {
+		return store.ClusterInfo{}, err
+	}
+	if info.NumShards != numShards {
+		return info, fmt.Errorf("%w: the cluster was created with %d shards, this node is configured for %d",
+			store.ErrClusterMismatch, info.NumShards, numShards)
+	}
+	return info, nil
+}
+
 func (s *Store) GetShard(ctx context.Context, shard int) (store.ShardInfo, error) {
 	s.enter()
 	var info store.ShardInfo
