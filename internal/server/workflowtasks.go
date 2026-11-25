@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -62,12 +61,15 @@ func (s *Server) PollWorkflowTask(ctx context.Context, r api.PollRequest) (*api.
 		if !ok {
 			return nil, nil
 		}
-		task, err := s.startWorkflowTask(ctx, t, r.Identity)
-		if errors.Is(err, api.ErrStaleTask) || errors.Is(err, api.ErrNotFound) {
+		task, err := s.startWorkflowTaskAnywhere(ctx, t, r.Identity)
+		if droppable(err) {
 			continue
 		}
 		if err != nil {
 			return nil, err
+		}
+		if task == nil {
+			continue
 		}
 		return task, nil
 	}

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -64,12 +63,15 @@ func (s *Server) PollActivityTask(ctx context.Context, r api.PollRequest) (*api.
 		if !ok {
 			return nil, nil
 		}
-		task, err := s.startActivityTask(ctx, t, r.Identity)
-		if errors.Is(err, api.ErrStaleTask) || errors.Is(err, api.ErrNotFound) {
+		task, err := s.startActivityTaskAnywhere(ctx, t, r.Identity)
+		if droppable(err) {
 			continue
 		}
 		if err != nil {
 			return nil, err
+		}
+		if task == nil {
+			continue
 		}
 		return task, nil
 	}

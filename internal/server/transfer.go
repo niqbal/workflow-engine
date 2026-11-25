@@ -94,7 +94,7 @@ func (s *Server) processTransfer(ctx context.Context, shard int) (int, error) {
 		}
 		// A task that cannot be pushed is retried at its redispatch time like any other.
 		ts.pushed[t.ID] = now.Add(s.cfg.RedispatchInterval)
-		if err := s.pushTransfer(t); err != nil {
+		if err := s.pushTransfer(ctx, t); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -146,9 +146,15 @@ func (ts *transferShard) observe(id int64) {
 	}
 }
 
-// pushTransfer adds a transfer task to the FIFO its DispatchRef names. The task carries its
+// pushTransfer puts a transfer task on the FIFO its DispatchRef names. The task carries its
 // key, so the poll handler can delete it when it starts the task.
-func (s *Server) pushTransfer(t store.Task) error {
+//
+// The queue may not be here. Matching is per node, so a task queue lives on exactly one of
+// them — the owner of hash(queue) mod NumShards — and a shard owner that writes a task for a
+// queue someone else holds pushes it there over the transport (SPEC §9, WI-052). The push is
+// best effort by design: a queue owner that is unreachable, or that crashes with the task in
+// memory, loses it, and the shard owner's redispatch puts it back (SPEC §8.2-8.3).
+func (s *Server) pushTransfer(ctx context.Context, t store.Task) error {
 	var p TransferPayload
 	if err := json.Unmarshal(t.Payload, &p); err != nil {
 		return fmt.Errorf("server: decode transfer task %d on shard %d: %w", t.ID, t.Shard, err)
@@ -162,8 +168,7 @@ func (s *Server) pushTransfer(t store.Task) error {
 	default:
 		return fmt.Errorf("server: transfer task %d on shard %d has unknown type %q", t.ID, t.Shard, p.Dispatch.Type)
 	}
-	s.match.Add(kind, p.Dispatch.TaskQueue, t)
-	return nil
+	return s.addTask(ctx, kind, p.Dispatch.TaskQueue, t)
 }
 
 // settleTransfer scans every owned shard until a full pass pushes nothing at the current

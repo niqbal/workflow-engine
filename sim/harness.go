@@ -17,6 +17,7 @@ import (
 	"github.com/niqbal/workflow-engine/internal/simrt"
 	"github.com/niqbal/workflow-engine/internal/store"
 	"github.com/niqbal/workflow-engine/internal/store/memstore"
+	"github.com/niqbal/workflow-engine/internal/transport"
 )
 
 // Registry binds workflow and activity code for the simulated workers.
@@ -44,6 +45,10 @@ type Workload struct {
 	Leases bool
 	// LeaseDuration is the shard lease when Leases is set. Zero means the server default.
 	LeaseDuration time.Duration
+	// Routing puts the nodes on a simulated network and sends every client and worker call
+	// through a node's router instead of straight to the shard's owner (WI-051, WI-052).
+	// Calls are then forwarded, retried and sometimes lost, like a real cluster's.
+	Routing bool
 
 	// Oracle checks the invariants after the quiet phase. Nil means Invariants{}: every
 	// check of SPEC §11.3. Use NoOracle for a workload that is deliberately not correct,
@@ -71,14 +76,16 @@ type Result struct {
 // Cluster is the N nodes, the shared store and the virtual clock of one run.
 // Start workflows through StartWorkflow so the quiet phase knows what to wait for.
 type Cluster struct {
-	rt     *simrt.Runtime
-	st     *memstore.Store
-	slots  []*node
-	shards int
-	leases bool
-	faults *Faults
-	oracle Oracle
-	rec    *Record
+	rt      *simrt.Runtime
+	st      *memstore.Store
+	slots   []*node
+	shards  int
+	leases  bool
+	routing bool
+	net     *network
+	faults  *Faults
+	oracle  Oracle
+	rec     *Record
 
 	ids     []string
 	done    bool
@@ -247,6 +254,10 @@ func (c *Cluster) boot(seed uint64, wl Workload) error {
 		cfg.FailoverAllowance = wl.Shards // a survivor may take everything
 	}
 	c.leases = wl.Leases
+	c.routing = wl.Routing
+	if wl.Routing {
+		c.net = newNetwork(c)
+	}
 	c.slots = make([]*node, wl.Nodes)
 	for i := 0; i < wl.Nodes; i++ {
 		c.slots[i] = &node{c: c, index: i, seed: seed, cfgBase: cfg,
@@ -318,11 +329,11 @@ func (c *Cluster) Quiet() bool { return c.quiet }
 // StartWorkflow routes the start to the node that owns the workflow's shard and records
 // the id for the quiet phase.
 func (c *Cluster) StartWorkflow(ctx context.Context, r api.StartRequest) (api.StartResponse, error) {
-	n, err := c.owner(r.WorkflowID)
+	svc, err := c.clientService(r.WorkflowID)
 	if err != nil {
 		return api.StartResponse{}, err
 	}
-	resp, err := n.StartWorkflow(ctx, r)
+	resp, err := svc.StartWorkflow(ctx, r)
 	if err != nil {
 		return resp, err
 	}
@@ -344,7 +355,7 @@ func (c *Cluster) StartRetrying(ctx context.Context, r api.StartRequest) (api.St
 			return resp, err
 		}
 		last = err
-		if !c.rt.Now().Before(deadline) {
+		if c.giveUp(attempt, deadline) {
 			return api.StartResponse{}, fmt.Errorf("sim: start %s gave up after %d attempts in %s: %w",
 				r.WorkflowID, attempt, c.clientRetryWindow(), last)
 		}
@@ -363,7 +374,7 @@ func (c *Cluster) SignalRetrying(ctx context.Context, r api.SignalRequest) error
 			return err
 		}
 		last = err
-		if !c.rt.Now().Before(deadline) {
+		if c.giveUp(attempt, deadline) {
 			return fmt.Errorf("sim: signal %s gave up after %d attempts in %s: %w",
 				r.WorkflowID, attempt, c.clientRetryWindow(), last)
 		}
@@ -382,7 +393,7 @@ func (c *Cluster) HistoryRetrying(ctx context.Context, workflowID string) ([]his
 			return evs, err
 		}
 		last = err
-		if !c.rt.Now().Before(deadline) {
+		if c.giveUp(attempt, deadline) {
 			return nil, fmt.Errorf("sim: history of %s gave up after %d attempts in %s: %w",
 				workflowID, attempt, c.clientRetryWindow(), last)
 		}
@@ -390,7 +401,19 @@ func (c *Cluster) HistoryRetrying(ctx context.Context, workflowID string) ([]his
 	}
 }
 
-const clientRetryDelay = 100 * time.Millisecond
+const (
+	clientRetryDelay = 100 * time.Millisecond
+	// clientMinAttempts is how many times a client tries whatever the clock says. A single
+	// attempt can itself eat the whole window — a forwarded call that waits out an
+	// ownership change, a reply held up by the network — and giving up after one try
+	// because time passed inside it is not a retry policy.
+	clientMinAttempts = 10
+)
+
+// giveUp reports whether a client has run out of both attempts and time.
+func (c *Cluster) giveUp(attempt int, deadline time.Time) bool {
+	return attempt >= clientMinAttempts && !c.rt.Now().Before(deadline)
+}
 
 // clientRetryWindow is how long a client keeps retrying an unknown outcome. It has to
 // outlast an ownership change, or a client gives up while the cluster is still deciding who
@@ -419,6 +442,10 @@ func transientForClient(err error) bool {
 		return true
 	case errors.Is(err, api.ErrNotOwner):
 		return true
+	case errors.Is(err, transport.ErrUnreachable):
+		// The node could not be reached, or its reply was lost: unknown outcome, so retry
+		// with the same request ID.
+		return true
 	}
 	return false
 }
@@ -426,32 +453,32 @@ func transientForClient(err error) bool {
 // SignalWorkflow delivers a signal on the owning node. Every outcome is recorded for I7:
 // an acknowledged signal must appear exactly once in history, a rejected one not at all.
 func (c *Cluster) SignalWorkflow(ctx context.Context, r api.SignalRequest) error {
-	n, err := c.owner(r.WorkflowID)
+	svc, err := c.clientService(r.WorkflowID)
 	if err != nil {
 		return err
 	}
-	err = n.SignalWorkflow(ctx, r)
+	err = svc.SignalWorkflow(ctx, r)
 	c.rec.Signals = append(c.rec.Signals, SignalRecord{WorkflowID: r.WorkflowID,
 		Name: r.SignalName, RequestID: r.RequestID, Err: err})
 	return err
 }
 
-// TerminateWorkflow terminates the latest run on the owning node.
+// TerminateWorkflow terminates the latest run.
 func (c *Cluster) TerminateWorkflow(ctx context.Context, r api.TerminateRequest) error {
-	n, err := c.owner(r.WorkflowID)
+	svc, err := c.clientService(r.WorkflowID)
 	if err != nil {
 		return err
 	}
-	return n.TerminateWorkflow(ctx, r)
+	return svc.TerminateWorkflow(ctx, r)
 }
 
-// DescribeWorkflow reads the latest run from the owning node.
+// DescribeWorkflow reads the latest run.
 func (c *Cluster) DescribeWorkflow(ctx context.Context, workflowID string) (api.Description, error) {
-	n, err := c.owner(workflowID)
+	svc, err := c.clientService(workflowID)
 	if err != nil {
 		return api.Description{}, err
 	}
-	return n.DescribeWorkflow(ctx, workflowID)
+	return svc.DescribeWorkflow(ctx, workflowID)
 }
 
 // GetHistory reads the latest run's history from the owning node, and records what it saw
@@ -465,11 +492,46 @@ func (c *Cluster) GetHistory(ctx context.Context, workflowID string) ([]history.
 }
 
 func (c *Cluster) readHistory(ctx context.Context, workflowID string) ([]history.Event, error) {
+	svc, err := c.clientService(workflowID)
+	if err != nil {
+		return nil, err
+	}
+	return svc.GetHistory(ctx, workflowID)
+}
+
+// clientService is the frontend a client call goes to. With routing it is any live node's
+// router, picked from the run's own RNG, which is what makes "a client may talk to any node"
+// a claim the simulator tests rather than one the harness arranges around. Without routing it
+// is the owner's own service, which is what the earlier milestones' tests expect.
+//
+// Outside a simulator task — the harness's own bookkeeping between runs — it is always the
+// owner, because a router may wait between attempts and only a task may wait.
+func (c *Cluster) clientService(workflowID string) (api.Service, error) {
+	if c.routing && c.rt.InTask() {
+		if svc := c.anyFrontend(); svc != nil {
+			return svc, nil
+		}
+	}
 	n, err := c.owner(workflowID)
 	if err != nil {
 		return nil, err
 	}
-	return n.GetHistory(ctx, workflowID)
+	return n.Service(), nil
+}
+
+// anyFrontend returns the router of a live node, chosen deterministically from the run's RNG.
+func (c *Cluster) anyFrontend() api.Service {
+	live := make([]int, 0, len(c.slots))
+	for i, n := range c.slots {
+		if n.server() != nil {
+			live = append(live, i)
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	pick := live[int(uint64(c.rt.Rand().Int63())%uint64(len(live)))]
+	return c.slots[pick].frontend()
 }
 
 // observe records one history snapshot. It copies nothing: the events are immutable once
@@ -506,6 +568,16 @@ func (c *Cluster) owner(workflowID string) (*server.Server, error) {
 
 // ShardFor maps a workflow ID to its shard, as the owning node would.
 func (c *Cluster) ShardFor(workflowID string) int { return c.shardFor(workflowID) }
+
+// routerRetryDelay is how long a node's router waits between attempts. It is short relative
+// to a lease so a forwarded call rides out an ownership change rather than failing.
+func (c *Cluster) routerRetryDelay() time.Duration {
+	lease := 30 * time.Second
+	if len(c.slots) > 0 && c.slots[0].cfgBase.LeaseDuration > 0 {
+		lease = c.slots[0].cfgBase.LeaseDuration
+	}
+	return lease / 10
+}
 
 // leaseOwner finds the node that holds a shard by lease, waiting while ownership moves. It
 // stands in for the frontend's router (WI-051): in one process the owner can be asked

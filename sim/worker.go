@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/niqbal/workflow-engine/internal/store"
+	"github.com/niqbal/workflow-engine/internal/transport"
 
 	"github.com/niqbal/workflow-engine/activity"
 	"github.com/niqbal/workflow-engine/internal/engine"
@@ -151,6 +152,10 @@ func (c *Cluster) transient(err error, index int) bool {
 		// The node lost its shard, or another writer got there first.
 		return true
 	case errors.Is(err, api.ErrStaleTask), errors.Is(err, api.ErrNotFound):
+		return true
+	case errors.Is(err, transport.ErrUnreachable):
+		// The node holding the queue, or the run, could not be reached. Poll again: the
+		// task is still in its shard's outbox and redispatch brings it back.
 		return true
 	case errors.Is(err, api.ErrNotOwner):
 		// The node lost the shard between serving this task and hearing about it. A real

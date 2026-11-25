@@ -18,12 +18,15 @@ package sim
 //	                         timer to fire early by
 //	worker crash             a worker dies after its activity's side effect and before it
 //	                         reports completion, so the attempt is retried (G4, I5)
+//	message loss             a call between nodes, or its reply, is lost; a lost reply is
+//	                         the ambiguous case, since the peer has already acted
+//	message delay            a call between nodes is held up
 //
-// What is not injected, and why: message drop, delay and partition between nodes. The
-// simulated cluster's nodes talk only through the shared store, so there are no inter-node
-// messages to drop yet; internal/transport/httptransport is not on the simulator's path.
-// A frozen node is the observable equivalent of one partitioned from the store. Routing
-// between nodes arrives with M4 (WI-051, WI-052), and the injectors for it belong there.
+// What is still not injected: partitions, as opposed to independent message loss. A
+// partition keeps two sets of nodes from talking while each keeps talking to itself, which
+// needs the drop decision to depend on the pair rather than on a coin flip. Message loss at a
+// high rate covers the cases routing has to survive; a partition would add the asymmetry of a
+// minority that keeps serving, and that belongs with the next item that can act on it.
 
 import (
 	"context"
@@ -64,6 +67,14 @@ type Faults struct {
 	// WorkerCrashRate is the probability that a worker dies after an activity's side
 	// effect and before reporting it.
 	WorkerCrashRate float64
+
+	// MessageDropRate is the probability that a call between nodes is lost, in each
+	// direction: a request that never arrives, and a reply that is lost after the peer has
+	// already acted. The second is the one that matters — the caller cannot tell the work
+	// happened, which is the ambiguity G1 rests on. Needs Workload.Routing.
+	MessageDropRate float64
+	// MessageDelayMax is the longest delay added to a call between nodes.
+	MessageDelayMax time.Duration
 }
 
 // NoFaults is a non-nil injector that injects nothing.
@@ -77,7 +88,7 @@ func (f *Faults) any() bool {
 	}
 	return f.CrashEvery > 0 || f.FreezeEvery > 0 || f.StoreErrorRate > 0 ||
 		f.AmbiguousRate > 0 || f.CommitDelayMax > 0 || f.ClockSkewMax > 0 ||
-		f.WorkerCrashRate > 0
+		f.WorkerCrashRate > 0 || f.MessageDropRate > 0 || f.MessageDelayMax > 0
 }
 
 // storeFaults reports whether the store hooks are needed.
@@ -210,6 +221,22 @@ func (f *Faults) frozenFor(c *Cluster, r rnd.Rand) time.Duration {
 		return jitter(r, f.FrozenFor)
 	}
 	return jitter(r, 2*c.leaseDuration())
+}
+
+// dropsMessage reports whether a call or reply between nodes is lost now.
+func (f *Faults) dropsMessage(r rnd.Rand) bool {
+	return f != nil && f.MessageDropRate > 0 && chance(r, f.MessageDropRate)
+}
+
+// messageDelay is how long a call between nodes is held up.
+func (f *Faults) messageDelay(r rnd.Rand) time.Duration {
+	if f == nil || f.MessageDelayMax <= 0 {
+		return 0
+	}
+	if !chance(r, 0.25) {
+		return 0
+	}
+	return jitter(r, f.MessageDelayMax)
 }
 
 // workerCrashes reports whether a worker dies now.

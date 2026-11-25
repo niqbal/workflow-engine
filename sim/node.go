@@ -34,10 +34,27 @@ type node struct {
 	seed    uint64
 	skew    time.Duration
 	srv     *server.Server
+	router  *server.Router
 	down    bool
 	frozen  time.Time // virtual time the pause ends
 	starts  int       // incarnations started, for traces
 	cfgBase server.Config
+}
+
+// name is the node's ID in the cluster and on the network.
+func (n *node) name() string { return fmt.Sprintf("node-%d", n.index) }
+
+// frontend returns the node's cluster-wide service: the router, when the cluster routes, and
+// the node's own service otherwise. Nil while the node is down.
+func (n *node) frontend() api.Service {
+	srv := n.server()
+	if srv == nil {
+		return nil
+	}
+	if n.router != nil {
+		return n.router
+	}
+	return srv.Service()
 }
 
 // server returns the current incarnation, or nil while the node is down.
@@ -57,7 +74,7 @@ func (n *node) server() *server.Server {
 func (n *node) start(ctx context.Context) error {
 	n.starts++
 	cfg := n.cfgBase
-	cfg.Node = fmt.Sprintf("node-%d", n.index)
+	cfg.Node = n.name()
 	for attempt := 1; ; attempt++ {
 		srv := server.New(n.c.runtimeFor(n), n.c.storeFor(n),
 			rnd.New(split(n.seed, n.index*31+n.starts)), cfg)
@@ -71,6 +88,7 @@ func (n *node) start(ctx context.Context) error {
 				}
 				n.srv = srv
 				n.down = false
+				n.joinNetwork(srv)
 				return nil
 			}
 		}
@@ -99,11 +117,28 @@ func (n *node) take(ctx context.Context, srv *server.Server) error {
 	return srv.StartOwned(ctx, n.shards)
 }
 
+// joinNetwork puts the incarnation on the simulated network: it serves its peers' calls, it
+// can reach theirs, and its frontend routes for the whole cluster.
+func (n *node) joinNetwork(srv *server.Server) {
+	if n.c.net == nil {
+		n.router = nil
+		return
+	}
+	srv.Register(n.c.net.register(n.name()))
+	tr := n.c.net.transportFor(n.name())
+	srv.UseTransport(tr)
+	n.router = server.NewRouter(srv, tr, server.RouterOptions{RetryDelay: n.c.routerRetryDelay()})
+}
+
 // stop ends the incarnation's loops and drops what it held in memory, as a crash would.
 func (n *node) stop(ctx context.Context) {
 	if n.srv == nil {
 		return
 	}
+	if n.c.net != nil {
+		n.c.net.unregister(n.name())
+	}
+	n.router = nil
 	n.srv.StopShards()
 	_ = n.srv.Stop(ctx)
 	n.srv.DropQueuedTasks()
@@ -180,13 +215,10 @@ func (c *Cluster) leaseDuration() time.Duration {
 	return c.slots[0].cfgBase.LeaseDuration
 }
 
-// serviceFor returns the node's frontend, or nil while it is down.
+// serviceFor returns the node's frontend, or nil while it is down. With routing that is the
+// router, so a worker polling this node is forwarded to whichever node holds the queue.
 func (c *Cluster) serviceFor(i int) api.Service {
-	srv := c.slots[i].server()
-	if srv == nil {
-		return nil
-	}
-	return srv.Service()
+	return c.slots[i].frontend()
 }
 
 // storeFor returns the node's view of the store: the shared store, plus the pause.

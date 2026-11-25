@@ -34,6 +34,11 @@ func Standard() *Faults {
 		CommitDelayMax:  time.Second,
 		ClockSkewMax:    250 * time.Millisecond,
 		WorkerCrashRate: 0.1,
+		// Message loss only bites a workload with Routing, where nodes talk to each other.
+		// A lost reply is the interesting one: the peer has already acted and the caller
+		// cannot tell.
+		MessageDropRate: 0.05,
+		MessageDelayMax: 200 * time.Millisecond,
 	}
 }
 
@@ -50,6 +55,7 @@ func Workloads() map[string]Builder {
 		"signals": Signals,
 		"agent":   Agent,
 		"leases":  Leases,
+		"routed":  Routed,
 	}
 }
 
@@ -338,6 +344,15 @@ func Leases() Workload {
 	wl := Basic()
 	wl.Leases = true
 	wl.LeaseDuration = 10 * time.Second
+	return wl
+}
+
+// Routed is the lease cluster with every client and worker call going through a node's
+// router: forwarded to whichever node owns the shard or holds the task queue, retried when
+// ownership moves, and sometimes lost on the way (WI-051, WI-052).
+func Routed() Workload {
+	wl := Leases()
+	wl.Routing = true
 	return wl
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/niqbal/workflow-engine/internal/server/matching"
 	"github.com/niqbal/workflow-engine/internal/shard"
 	"github.com/niqbal/workflow-engine/internal/store"
+	"github.com/niqbal/workflow-engine/internal/transport"
 	"github.com/niqbal/workflow-engine/internal/xsync"
 )
 
@@ -70,6 +71,9 @@ type Server struct {
 	// margin (internal/shard, WI-050). It replaced a plain fence map, so there is one
 	// answer to "may I write to this shard" and the lease logic is testable on its own.
 	shards *shard.Manager
+	// peerTransport reaches the other nodes, for queue pushes (router.go). Nil on a node
+	// that has no peers.
+	peerTransport transport.Transport
 
 	// sub holds per-subsystem state. Its type lives in subsystems.go, which work items may
 	// extend; this file stays hand-owned.

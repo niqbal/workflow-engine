@@ -32,6 +32,9 @@ type Collector struct {
 	// everything they tried. A node riding out a store fault increments it and keeps
 	// serving until the stop-serving margin (cluster.go, SPEC §9).
 	shardPlacementErrors atomic.Uint64
+	// queuePushFailures counts tasks that could not be handed to the node holding their
+	// queue. Redispatch is the retry, so this is a symptom, not a loss (router.go).
+	queuePushFailures atomic.Uint64
 
 	shardsOwned   atomic.Int64
 	pendingTimers atomic.Int64
@@ -93,6 +96,9 @@ func (c *Collector) ObserveHistoryAppendLatency(d time.Duration) {
 func (c *Collector) IncErrConflict() { c.errConflictTotal.Add(1) }
 
 func (c *Collector) IncErrFenced() { c.errFencedTotal.Add(1) }
+
+// IncQueuePushFailure counts one task that could not be handed to its queue's owner.
+func (c *Collector) IncQueuePushFailure() { c.queuePushFailures.Add(1) }
 
 // IncShardPlacementError counts one placement pass that did not fully succeed.
 func (c *Collector) IncShardPlacementError() { c.shardPlacementErrors.Add(1) }
@@ -171,6 +177,10 @@ func (c *Collector) Handler() http.Handler {
 		fmt.Fprintln(&b, "# HELP wfe_err_fenced_total Store ErrFenced occurrences")
 		fmt.Fprintln(&b, "# TYPE wfe_err_fenced_total counter")
 		fmt.Fprintf(&b, "wfe_err_fenced_total %d\n", c.errFencedTotal.Load())
+
+		fmt.Fprintln(&b, "# HELP wfe_queue_push_failures_total Tasks that could not be handed to their queue owner")
+		fmt.Fprintln(&b, "# TYPE wfe_queue_push_failures_total counter")
+		fmt.Fprintf(&b, "wfe_queue_push_failures_total %d\n", c.queuePushFailures.Load())
 
 		fmt.Fprintln(&b, "# HELP wfe_shard_placement_errors_total Placement passes that could not renew or acquire everything")
 		fmt.Fprintln(&b, "# TYPE wfe_shard_placement_errors_total counter")
